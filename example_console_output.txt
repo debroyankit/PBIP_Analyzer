@@ -14,6 +14,9 @@ Visuals:
 Pages:
 * Supplier Analysis
 
+Related Tables:
+* Fact Procurement
+
 ==================================================
 
 ==================================================
@@ -31,6 +34,9 @@ Visuals:
 
 Pages:
   (none)
+
+Related Tables:
+* Fact Procurement
 
 ==================================================
 
@@ -57,5 +63,26 @@ Pages:
 * Executive Dashboard
 * Supplier Analysis
 
+Related Tables:
+* Dim_Material
+* Dim_Vendor
+
 ==================================================
 
+==================================================
+UNUSED ENTITIES (not referenced by any visual)
+
+Tables:
+* Dim_Vendor
+
+Measures:
+* Vendor Count
+
+Columns:
+* Dim_Material[MaterialID]
+* Dim_Material[StandardCost]
+* Dim_Vendor[Region]
+* Dim_Vendor[Vendor]
+* Fact Procurement[POID]
+
+==================================================

@@ -18,6 +18,10 @@ table 'Fact Procurement'
 \tcolumn Vendor
 \t\tdataType: string
 
+\tcolumn Effective Rate = RELATED(ExchangeRate[Rate]) * [Spend]
+\t\tdataType: double
+\t\tlineageTag: def-456
+
 \tmeasure 'Total Spend' = SUM('Fact Procurement'[Spend])
 \t\tformatString: "#,0"
 
@@ -41,7 +45,20 @@ def test_parses_table_name():
 
 def test_parses_columns():
     tables = _parse_tmdl_tables(SAMPLE_TABLE_TMDL)
-    assert tables[0].columns == {"Spend", "Vendor"}
+    assert set(tables[0].columns) == {"Spend", "Vendor", "Effective Rate"}
+
+
+def test_parses_calculated_column_expression_without_leaking_properties():
+    tables = _parse_tmdl_tables(SAMPLE_TABLE_TMDL)
+    calc_column = tables[0].columns["Effective Rate"]
+    assert calc_column.expression == "RELATED(ExchangeRate[Rate]) * [Spend]"
+    assert "lineageTag" not in calc_column.expression
+
+
+def test_plain_columns_have_no_expression():
+    tables = _parse_tmdl_tables(SAMPLE_TABLE_TMDL)
+    assert tables[0].columns["Spend"].expression == ""
+    assert tables[0].columns["Vendor"].expression == ""
 
 
 def test_parses_simple_measure_without_leaking_properties():

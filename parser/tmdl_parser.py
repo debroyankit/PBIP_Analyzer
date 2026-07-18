@@ -18,16 +18,15 @@ Supports the two formats Power BI Desktop can save a semantic model in:
         model.bim
 
 This module only extracts what's needed for dependency analysis: table
-names, column names, measure names + DAX, and relationships. It does not
-attempt to be a complete TMDL/TMSL grammar implementation.
+names, column names (including calculated column formulas), measure names +
+DAX, and relationships. It does not attempt to be a complete TMDL/TMSL
+grammar implementation.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from utils.exceptions import CorruptFileError, SemanticModelNotFoundError
 from utils.file_utils import list_files, read_json_safe, read_text_safe
@@ -37,13 +36,14 @@ logger = get_logger("tmdl_parser")
 
 _TMDL_TOP_LEVEL_KEYWORDS = {"column", "measure", "partition", "hierarchy", "table"}
 
-# Known TMDL measure/column property keys. These always terminate a measure's
-# DAX continuation, regardless of indentation, because in TMDL a measure's
-# *own* properties (formatString, lineageTag, etc.) are conventionally
-# indented one level deeper than the "measure 'Name' = ..." line itself --
-# exactly like a genuine multi-line DAX continuation would be. Indentation
-# alone can't disambiguate the two, so we recognize these properties by name.
-_MEASURE_PROPERTY_KEYWORDS = {
+# Known TMDL measure/column property keys. These always terminate a DAX
+# continuation, regardless of indentation, because in TMDL a measure's or
+# calculated column's *own* properties (formatString, lineageTag, etc.) are
+# conventionally indented one level deeper than the declaration line itself
+# -- exactly like a genuine multi-line DAX continuation would be.
+# Indentation alone can't disambiguate the two, so we recognize these
+# properties by name instead.
+_DAX_PROPERTY_KEYWORDS = {
     "formatString",
     "displayFolder",
     "isHidden",
@@ -58,6 +58,13 @@ _MEASURE_PROPERTY_KEYWORDS = {
     "formatStringDefinition",
     "dataCategory",
     "extendedProperty",
+    "sourceColumn",
+    "isKey",
+    "isNameInferred",
+    "isDefaultLabel",
+    "isDefaultImage",
+    "encoding",
+    "sortByColumn",
 }
 
 
@@ -69,9 +76,21 @@ class RawMeasure:
 
 
 @dataclass
+class RawColumn:
+    """A column as declared in TMDL/TMSL.
+
+    ``expression`` is non-empty only for *calculated* columns (``column X =
+    <DAX>``); plain data columns leave it blank.
+    """
+
+    name: str
+    expression: str = ""
+
+
+@dataclass
 class RawTable:
     name: str
-    columns: set[str] = field(default_factory=set)
+    columns: dict[str, RawColumn] = field(default_factory=dict)
     measures: list[RawMeasure] = field(default_factory=list)
 
 
@@ -186,13 +205,22 @@ def _parse_tmdl_tables(text: str) -> list[RawTable]:
 
         if current_table is not None:
             if stripped.startswith("column "):
-                col_name = _unquote(stripped[len("column ") :].split("=")[0])
-                current_table.columns.add(col_name)
-                i += 1
+                header_body = stripped[len("column ") :]
+                if "=" in header_body:
+                    # Calculated column -- parse its DAX formula the same
+                    # way a measure's expression is parsed (including any
+                    # multi-line continuation).
+                    col_name, expr, next_i = _parse_dax_named_block(lines, i, "column ")
+                    current_table.columns[col_name] = RawColumn(name=col_name, expression=expr)
+                    i = next_i
+                else:
+                    col_name = _unquote(header_body)
+                    current_table.columns[col_name] = RawColumn(name=col_name)
+                    i += 1
                 continue
 
             if stripped.startswith("measure "):
-                measure_name, dax, next_i = _parse_measure_block(lines, i)
+                measure_name, dax, next_i = _parse_dax_named_block(lines, i, "measure ")
                 current_table.measures.append(
                     RawMeasure(name=measure_name, table=current_table.name, dax=dax)
                 )
@@ -204,15 +232,19 @@ def _parse_tmdl_tables(text: str) -> list[RawTable]:
     return tables
 
 
-def _parse_measure_block(lines: list[str], start_index: int) -> tuple[str, str, int]:
-    """Parse a ``measure 'Name' = <expr>`` block, including continuation lines.
+def _parse_dax_named_block(lines: list[str], start_index: int, prefix: str) -> tuple[str, str, int]:
+    """Parse a ``<prefix>'Name' = <expr>`` block, including continuation lines.
+
+    Shared by both ``measure`` (always has an expression) and calculated
+    ``column`` (has an expression only when a top-level ``=`` is present)
+    declarations, since both use identical TMDL continuation semantics.
 
     Returns:
-        (measure_name, dax_expression, index_of_next_unconsumed_line)
+        (name, dax_expression, index_of_next_unconsumed_line)
     """
     header = lines[start_index]
     header_indent = _indent_of(header)
-    header_body = header.strip()[len("measure ") :]
+    header_body = header.strip()[len(prefix) :]
 
     if "=" in header_body:
         name_part, _, expr_part = header_body.partition("=")
@@ -234,15 +266,16 @@ def _parse_measure_block(lines: list[str], start_index: int) -> tuple[str, str, 
         first_token = stripped.split(" ", 1)[0].split(":", 1)[0]
 
         # A new sibling/child structural block (table/column/measure/
-        # partition/hierarchy) at or above the measure's own indent ends
-        # the DAX continuation.
+        # partition/hierarchy) at or above the declaration's own indent
+        # ends the DAX continuation.
         if indent <= header_indent and first_token in _TMDL_TOP_LEVEL_KEYWORDS:
             break
 
-        # A known measure property (formatString, lineageTag, ...) ends the
-        # DAX continuation regardless of indentation -- see the comment on
-        # _MEASURE_PROPERTY_KEYWORDS for why indentation alone is ambiguous.
-        if first_token in _MEASURE_PROPERTY_KEYWORDS:
+        # A known measure/column property (formatString, lineageTag, ...)
+        # ends the DAX continuation regardless of indentation -- see the
+        # comment on _DAX_PROPERTY_KEYWORDS for why indentation alone is
+        # ambiguous.
+        if first_token in _DAX_PROPERTY_KEYWORDS:
             break
 
         dax_lines.append(stripped)
@@ -316,8 +349,12 @@ def _parse_bim(bim_path: Path) -> RawSemanticModel:
 
         for col in table_json.get("columns", []):
             col_name = col.get("name")
-            if col_name:
-                raw_table.columns.add(col_name)
+            if not col_name:
+                continue
+            expr = col.get("expression", "")
+            if isinstance(expr, list):
+                expr = "\n".join(expr)
+            raw_table.columns[col_name] = RawColumn(name=col_name, expression=expr or "")
 
         for meas in table_json.get("measures", []):
             meas_name = meas.get("name")

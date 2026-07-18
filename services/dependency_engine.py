@@ -25,6 +25,41 @@ logger = get_logger("dependency_engine")
 
 
 @dataclass
+class Relationship:
+    """A relationship edge between two tables, as declared in the model."""
+
+    from_table: str
+    from_column: str
+    to_table: str
+    to_column: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "from_table": self.from_table,
+            "from_column": self.from_column,
+            "to_table": self.to_table,
+            "to_column": self.to_column,
+        }
+
+
+@dataclass
+class CalculatedColumn:
+    """A calculated column's formula and the tables it reaches into."""
+
+    table: str
+    column: str
+    expression: str
+    referenced_tables: set[str] = field(default_factory=set)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "table": self.table,
+            "expression": self.expression,
+            "referenced_tables": sorted(self.referenced_tables),
+        }
+
+
+@dataclass
 class DependencyGraph:
     """Fully linked output: one repository per entity type, keyed by name/id."""
 
@@ -32,6 +67,8 @@ class DependencyGraph:
     measures: dict[str, Measure] = field(default_factory=dict)
     visuals: dict[str, Visual] = field(default_factory=dict)
     pages: dict[str, Page] = field(default_factory=dict)
+    relationships: list[Relationship] = field(default_factory=list)
+    calculated_columns: dict[str, CalculatedColumn] = field(default_factory=dict)  # key: "Table[Column]"
 
 
 class DependencyEngine:
@@ -47,15 +84,19 @@ class DependencyEngine:
         Order matters:
             1. Tables + columns (from the semantic model).
             2. Measures, with DAX-derived table/column references.
-            3. Pages + visuals (from the report), with fields classified as
+            3. Calculated columns, with DAX-derived table references.
+            4. Relationships, linking related tables directly.
+            5. Pages + visuals (from the report), with fields classified as
                columns vs. measures using the model built in steps 1-2.
-            4. Cross-link everything (table<->measure, table<->visual,
+            6. Cross-link everything (table<->measure, table<->visual,
                table<->page, measure<->visual, measure<->page).
         """
         graph = DependencyGraph()
 
         self._build_tables(graph)
         self._build_measures(graph)
+        self._build_calculated_columns(graph)
+        self._build_relationships(graph)
         self._build_pages_and_visuals(graph)
         self._link_measures_to_tables(graph)
         self._link_visuals_to_tables_and_measures(graph)
@@ -69,6 +110,9 @@ class DependencyEngine:
 
     def _build_tables(self, graph: DependencyGraph) -> None:
         for raw_table in self._semantic_model.tables.values():
+            # `raw_table.columns` is a dict[str, RawColumn]; iterating/`set()`-ing
+            # a dict yields its keys, which is exactly the plain column-name set
+            # the Table model needs.
             graph.tables[raw_table.name] = Table(name=raw_table.name, columns=set(raw_table.columns))
 
     # ------------------------------------------------------------------
@@ -105,7 +149,8 @@ class DependencyEngine:
 
         # Resolve bare "[Name]" references (found via dax_parser) against
         # the full set of known measure names, now that every measure has
-        # been registered.
+        # been registered. This also records the measure-to-measure
+        # dependency edge in both directions for lineage purposes.
         all_measure_names = set(graph.measures.keys())
         for measure in graph.measures.values():
             dax_refs = extract_references(measure.dax)
@@ -113,9 +158,78 @@ class DependencyEngine:
                 if bare_name in all_measure_names and bare_name != measure.name:
                     referenced_measure = graph.measures[bare_name]
                     measure.referenced_tables |= referenced_measure.referenced_tables
+                    measure.depends_on_measures.add(bare_name)
+                    referenced_measure.used_by_measures.add(measure.name)
 
     # ------------------------------------------------------------------
-    # Step 3: pages + visuals
+    # Step 3: calculated columns
+    # ------------------------------------------------------------------
+
+    def _build_calculated_columns(self, graph: DependencyGraph) -> None:
+        """Extract cross-table references from calculated column formulas.
+
+        A calculated column such as::
+
+            column Savings = RELATED(Invoice[Discount Percent]) * [Invoice Amount]
+
+        creates a real dependency from its table onto ``Invoice``, even
+        though no relationship or measure captures that link. We record it
+        both as a standalone `CalculatedColumn` (for the detailed report)
+        and by growing each table's `related_tables` set (for the at-a-
+        glance table view).
+        """
+        for raw_table in self._semantic_model.tables.values():
+            for raw_column in raw_table.columns.values():
+                if not raw_column.expression:
+                    continue
+
+                dax_refs = extract_references(raw_column.expression)
+                referenced_tables = {t for t in dax_refs.tables if t != raw_table.name}
+
+                key = f"{raw_table.name}[{raw_column.name}]"
+                graph.calculated_columns[key] = CalculatedColumn(
+                    table=raw_table.name,
+                    column=raw_column.name,
+                    expression=raw_column.expression,
+                    referenced_tables=referenced_tables,
+                )
+
+                if not referenced_tables:
+                    continue
+
+                home_table = graph.tables.get(raw_table.name)
+                for other_table_name in referenced_tables:
+                    if home_table is not None:
+                        home_table.related_tables.add(other_table_name)
+                    other_table = graph.tables.get(other_table_name)
+                    if other_table is not None:
+                        other_table.related_tables.add(raw_table.name)
+
+    # ------------------------------------------------------------------
+    # Step 4: relationships
+    # ------------------------------------------------------------------
+
+    def _build_relationships(self, graph: DependencyGraph) -> None:
+        """Record model relationships and link each pair of tables directly."""
+        for raw_rel in self._semantic_model.relationships:
+            graph.relationships.append(
+                Relationship(
+                    from_table=raw_rel.from_table,
+                    from_column=raw_rel.from_column,
+                    to_table=raw_rel.to_table,
+                    to_column=raw_rel.to_column,
+                )
+            )
+
+            from_table = graph.tables.get(raw_rel.from_table)
+            to_table = graph.tables.get(raw_rel.to_table)
+            if from_table is not None and raw_rel.to_table:
+                from_table.related_tables.add(raw_rel.to_table)
+            if to_table is not None and raw_rel.from_table:
+                to_table.related_tables.add(raw_rel.from_table)
+
+    # ------------------------------------------------------------------
+    # Step 5: pages + visuals
     # ------------------------------------------------------------------
 
     def _build_pages_and_visuals(self, graph: DependencyGraph) -> None:
@@ -157,7 +271,7 @@ class DependencyEngine:
             graph.pages[page.name] = page
 
     # ------------------------------------------------------------------
-    # Step 4: cross-linking
+    # Step 6: cross-linking
     # ------------------------------------------------------------------
 
     def _link_measures_to_tables(self, graph: DependencyGraph) -> None:
@@ -199,3 +313,41 @@ class DependencyEngine:
             page = graph.pages.get(visual.page)
             if page is not None:
                 page.tables |= visual.tables
+
+
+def find_unused_entities(graph: DependencyGraph) -> dict[str, object]:
+    """Identify tables, measures, and columns that appear unused in the report.
+
+    "Unused" means never referenced by any visual -- a useful model-hygiene
+    signal (e.g. a table imported but never surfaced, or a measure someone
+    built and then abandoned). This is purely a report on top of the already
+    -built graph; it does not mutate anything.
+
+    Returns:
+        A dict with three keys:
+            - "unused_tables": table names with no visuals.
+            - "unused_measures": measure names with no visuals.
+            - "unused_columns": {table_name: [column_names]} for tables that
+              have at least one column never referenced by any visual.
+    """
+    unused_tables = sorted(name for name, table in graph.tables.items() if not table.visuals)
+    unused_measures = sorted(name for name, measure in graph.measures.items() if not measure.visuals)
+
+    used_columns_by_table: dict[str, set[str]] = {name: set() for name in graph.tables}
+    for visual in graph.visuals.values():
+        for qualified_column in visual.columns:
+            table_name, _, column_name = qualified_column.partition("[")
+            column_name = column_name.rstrip("]")
+            used_columns_by_table.setdefault(table_name, set()).add(column_name)
+
+    unused_columns: dict[str, list[str]] = {}
+    for table_name, table in graph.tables.items():
+        unused = sorted(table.columns - used_columns_by_table.get(table_name, set()))
+        if unused:
+            unused_columns[table_name] = unused
+
+    return {
+        "unused_tables": unused_tables,
+        "unused_measures": unused_measures,
+        "unused_columns": unused_columns,
+    }

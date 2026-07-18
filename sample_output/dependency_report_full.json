@@ -13,6 +13,9 @@
       ],
       "pages": [
         "Supplier Analysis"
+      ],
+      "related_tables": [
+        "Fact Procurement"
       ]
     },
     "Dim_Vendor": {
@@ -24,7 +27,10 @@
         "Vendor Count"
       ],
       "visuals": [],
-      "pages": []
+      "pages": [],
+      "related_tables": [
+        "Fact Procurement"
+      ]
     },
     "Fact Procurement": {
       "columns": [
@@ -46,6 +52,10 @@
       "pages": [
         "Executive Dashboard",
         "Supplier Analysis"
+      ],
+      "related_tables": [
+        "Dim_Material",
+        "Dim_Vendor"
       ]
     }
   },
@@ -64,7 +74,9 @@
       ],
       "pages": [
         "Executive Dashboard"
-      ]
+      ],
+      "depends_on_measures": [],
+      "used_by_measures": []
     },
     "Purchase Price Variance": {
       "table": "Fact Procurement",
@@ -82,7 +94,9 @@
       ],
       "pages": [
         "Supplier Analysis"
-      ]
+      ],
+      "depends_on_measures": [],
+      "used_by_measures": []
     },
     "Total Spend": {
       "table": "Fact Procurement",
@@ -98,7 +112,9 @@
       ],
       "pages": [
         "Executive Dashboard"
-      ]
+      ],
+      "depends_on_measures": [],
+      "used_by_measures": []
     },
     "Vendor Count": {
       "table": "Dim_Vendor",
@@ -110,7 +126,9 @@
         "Dim_Vendor[Vendor]"
       ],
       "visuals": [],
-      "pages": []
+      "pages": [],
+      "depends_on_measures": [],
+      "used_by_measures": []
     }
   },
   "visuals": {
@@ -174,6 +192,42 @@
       "tables": [
         "Dim_Material",
         "Fact Procurement"
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "from_table": "Fact Procurement",
+      "from_column": "Vendor",
+      "to_table": "Dim_Vendor",
+      "to_column": "Vendor"
+    },
+    {
+      "from_table": "Fact Procurement",
+      "from_column": "POID",
+      "to_table": "Dim_Material",
+      "to_column": "MaterialID"
+    }
+  ],
+  "calculated_columns": {},
+  "unused_entities": {
+    "unused_tables": [
+      "Dim_Vendor"
+    ],
+    "unused_measures": [
+      "Vendor Count"
+    ],
+    "unused_columns": {
+      "Dim_Material": [
+        "MaterialID",
+        "StandardCost"
+      ],
+      "Dim_Vendor": [
+        "Region",
+        "Vendor"
+      ],
+      "Fact Procurement": [
+        "POID"
       ]
     }
   }

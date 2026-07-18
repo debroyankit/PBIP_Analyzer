@@ -22,17 +22,35 @@ python main.py "C:/Projects/Procurement.pbip"
 This will:
 
 1. Locate the project's Report and Semantic Model folders automatically.
-2. Parse the semantic model (tables, columns, measures, relationships).
+2. Parse the semantic model (tables, columns, calculated columns, measures,
+   relationships).
 3. Parse the report (pages, visuals, fields/measures used).
-4. Build the full dependency graph.
-5. Print a per-table report to the console.
+4. Build the full dependency graph, including relationship- and
+   calculated-column-derived table links, and measure-to-measure lineage.
+5. Print a per-table report to the console, plus an unused-entities summary.
 6. Write `./output/dependency_report.json` (and a richer
    `dependency_report_full.json`, see [Output](#output) below).
 
-You can also point at a custom output directory:
+Useful flags:
 
 ```bash
-python main.py "C:/Projects/Procurement.pbip" --output ./reports --verbose
+# Custom output directory
+python main.py "C:/Projects/Procurement.pbip" --output ./reports
+
+# Only print one table's dependency report to the console
+python main.py "C:/Projects/Procurement.pbip" --table "Fact Procurement"
+
+# Also emit a Graphviz DOT file (dependency_graph.dot) for a visual diagram
+python main.py "C:/Projects/Procurement.pbip" --graph
+
+# Debug logging
+python main.py "C:/Projects/Procurement.pbip" --verbose
+```
+
+Render the graph with Graphviz once installed:
+
+```bash
+dot -Tpng output/dependency_graph.dot -o dependency_graph.png
 ```
 
 ### As a library
@@ -79,7 +97,8 @@ pbip_analyzer/
 │   ├── visual_parser.py        # Parses one visual.json -> type/title/field refs
 │   └── dax_parser.py           # Regex-based DAX reference extractor
 ├── services/
-│   └── dependency_engine.py    # Cross-links tables/measures/visuals/pages
+│   ├── dependency_engine.py    # Cross-links tables/measures/visuals/pages
+│   └── graph_export.py         # Optional Graphviz DOT export
 ├── models/
 │   ├── table.py                # Table dataclass
 │   ├── measure.py               # Measure dataclass
@@ -127,6 +146,37 @@ FastAPI endpoint without touching parsing logic.
   Price Variance", whose DAX references both `Fact Procurement` and
   `Dim_Material`, is correctly linked to **both** tables).
 - A table's **pages** = the pages containing any of the visuals above.
+- A table's **related_tables** = every other table it's structurally
+  connected to, from two sources:
+  - **Model relationships** (`relationships.tmdl` / TMSL `relationships`) --
+    linked in both directions regardless of cardinality/cross-filter
+    direction.
+  - **Calculated columns** whose DAX formula reaches into another table,
+    most commonly via `RELATED(...)` or `RELATEDTABLE(...)` (e.g. a
+    `Savings` column on `Invoice Line Item` computed as
+    `RELATED(Invoice[Discount Percent]) * [Invoice Amount]` correctly links
+    `Invoice Line Item` <-> `Invoice`, even though no measure or
+    relationship expresses that link explicitly).
+- Each **measure** also tracks `depends_on_measures` / `used_by_measures` --
+  the lineage chain created when one measure references another via a bare
+  `[Measure Name]` expression.
+
+### Unused-entity detection
+
+Since the graph already knows every table/measure/column's full usage, the
+engine also flags anything **never referenced by a visual** -- a quick
+model-hygiene signal for identifying imported-but-unused tables, abandoned
+measures, or columns nobody ever put on a report. This is included in the
+console report (final section) and in `dependency_report_full.json` under
+`"unused_entities"`.
+
+### Dependency graph diagram (optional)
+
+Passing `--graph` writes `dependency_graph.dot` alongside the JSON reports:
+table nodes, page nodes, solid edges for table -> page usage (labeled with
+the connecting visual titles), dashed edges for model relationships, and
+dotted edges for calculated-column cross-table references. See
+`services/graph_export.py`.
 
 ### DAX parsing approach
 
@@ -184,12 +234,39 @@ Pages:
 * Executive Dashboard
 * Supplier Analysis
 
+Related Tables:
+* Dim_Material
+* Dim_Vendor
+
+==================================================
+```
+
+A final section flags anything never used by a visual:
+
+```
+==================================================
+UNUSED ENTITIES (not referenced by any visual)
+
+Tables:
+* Dim_Vendor
+
+Measures:
+* Vendor Count
+
+Columns:
+* Dim_Material[MaterialID]
+* Dim_Material[StandardCost]
+* Dim_Vendor[Region]
+* Dim_Vendor[Vendor]
+* Fact Procurement[POID]
+
 ==================================================
 ```
 
 ### `dependency_report.json` (primary, table-keyed)
 
-Matches the required shape exactly — one entry per table:
+Matches the required shape, with one addition (`related_tables`, from
+relationships + calculated columns):
 
 ```json
 {
@@ -197,15 +274,19 @@ Matches the required shape exactly — one entry per table:
     "columns": ["Currency", "POID", "Spend", "Vendor"],
     "measures": ["Avg Spend", "Purchase Price Variance", "Total Spend"],
     "visuals": ["KPI Card", "Spend Trend", "Supplier Matrix"],
-    "pages": ["Executive Dashboard", "Supplier Analysis"]
+    "pages": ["Executive Dashboard", "Supplier Analysis"],
+    "related_tables": ["Dim_Material", "Dim_Vendor"]
   }
 }
 ```
 
 ### `dependency_report_full.json` (extended, for deeper analysis / an API)
 
-Adds full detail for every entity type — including each measure's DAX text
-and referenced tables/columns, and every visual's type/page:
+Adds full detail for every entity type -- each measure's DAX text,
+referenced tables/columns and measure-to-measure lineage; every visual's
+type/page; the raw model **relationships**; every **calculated column**
+that reaches into another table; and the **unused_entities** hygiene
+summary:
 
 ```json
 {
@@ -217,30 +298,39 @@ and referenced tables/columns, and every visual's type/page:
       "referenced_tables": ["Dim_Material", "Fact Procurement"],
       "referenced_columns": ["Dim_Material[StandardCost]", "Fact Procurement[Spend]"],
       "visuals": ["Supplier Matrix"],
-      "pages": ["Supplier Analysis"]
+      "pages": ["Supplier Analysis"],
+      "depends_on_measures": [],
+      "used_by_measures": []
     }
   },
-  "visuals": {
-    "visSupplierMatrix": {
-      "title": "Supplier Matrix",
-      "type": "pivotTable",
-      "page": "Supplier Analysis",
-      "tables": ["Dim_Material", "Fact Procurement"],
-      "columns": ["Fact Procurement[Spend]", "Fact Procurement[Vendor]"],
-      "measures": ["Purchase Price Variance"]
+  "visuals": { "...": "type/page/tables/columns/measures per visual" },
+  "pages": { "...": "visuals/tables per page" },
+  "relationships": [
+    {
+      "from_table": "Fact Procurement",
+      "from_column": "Vendor",
+      "to_table": "Dim_Vendor",
+      "to_column": "Vendor"
+    }
+  ],
+  "calculated_columns": {
+    "Invoice Line Item[Savings]": {
+      "table": "Invoice Line Item",
+      "expression": "RELATED(Invoice[Discount Percent])*[Invoice Amount]",
+      "referenced_tables": ["Invoice"]
     }
   },
-  "pages": {
-    "Supplier Analysis": {
-      "visuals": ["Supplier Matrix"],
-      "tables": ["Dim_Material", "Fact Procurement"]
-    }
+  "unused_entities": {
+    "unused_tables": ["Dim_Vendor"],
+    "unused_measures": ["Vendor Count"],
+    "unused_columns": { "Fact Procurement": ["POID"] }
   }
 }
 ```
 
 A sample project and its generated output are included under
-[`sample_project/`](./sample_project) and [`sample_output/`](./sample_output).
+[`sample_project/`](./sample_project) and [`sample_output/`](./sample_output)
+(including a rendered `dependency_graph.dot`).
 
 ---
 
@@ -277,26 +367,25 @@ The architecture is intentionally split so each extension point is isolated:
 - **New report/model format version** → add a new branch inside
   `tmdl_parser.parse_semantic_model` / `report_parser.parse_report`; nothing
   else needs to change since both return the same `Raw*` structures.
-- **Richer DAX analysis** (e.g. detecting `RELATED`/`RELATEDTABLE` traversal
-  direction) → extend `dax_parser.extract_references`.
-- **New output format** (e.g. CSV, Markdown, a graph/DOT file) → add a
-  `build_*` + writer function in `main.py` alongside
-  `build_table_summary` / `write_json_reports`; the `DependencyGraph` already
-  has everything needed.
+- **Richer DAX analysis** (e.g. distinguishing `RELATED` from a plain column
+  reference) → extend `dax_parser.extract_references`.
+- **New output format** (e.g. CSV, Markdown) → add a `build_*` + writer
+  function in `main.py` alongside `build_table_summary` /
+  `write_json_reports`; the `DependencyGraph` already has everything needed.
 - **A FastAPI backend** → import `analyze_pbip` (file-based) or
   `DependencyEngine` (in-memory, if you already have parsed data) directly;
   neither has any CLI or filesystem-output coupling baked in beyond writing
-  the two JSON files, which is trivially optional.
+  the JSON/DOT files, which is trivially optional.
 
 ## Known limitations
 
 - DAX parsing is regex-based, not a full grammar; it will not resolve
   references inside string literals that happen to look like `Table[Column]`,
-  and does not model `RELATED`/`RELATEDTABLE` traversal direction separately
-  from a plain column reference.
-- Calculated columns and calculation groups are not yet modeled as separate
-  entities (only measures and columns are).
-- Visual-level/page-level *filters* are not currently walked for field
-  references — only the visual's own query fields are (this can be added by
-  extending `visual_parser._extract_field_refs` to also scan a visual's
-  `filterConfig`, since the walker is already generic).
+  and does not distinguish `RELATED`/`RELATEDTABLE` traversal direction from
+  a plain column reference (both simply register as "this entity touches
+  that table").
+- Calculation groups and hierarchies are not yet modeled as their own
+  entities (only tables, columns, calculated columns, and measures are).
+- Visual **and filter** field references are both captured, since the field
+  walker scans the entire `visual.json` (query state *and* `filterConfig`)
+  generically -- verified against real-world PBIR exports.

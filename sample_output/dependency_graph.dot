@@ -1,0 +1,14 @@
+digraph PBIPDependencies {
+  rankdir="LR";
+  node [fontname="Helvetica"];
+  "table::Dim_Material" [label="Dim_Material", shape=box, style=filled, fillcolor="#cfe2f3"];
+  "table::Dim_Vendor" [label="Dim_Vendor", shape=box, style=filled, fillcolor="#cfe2f3"];
+  "table::Fact Procurement" [label="Fact Procurement", shape=box, style=filled, fillcolor="#cfe2f3"];
+  "page::Executive Dashboard" [label="Executive Dashboard", shape=folder, style=filled, fillcolor="#fff2cc"];
+  "page::Supplier Analysis" [label="Supplier Analysis", shape=folder, style=filled, fillcolor="#fff2cc"];
+  "table::Dim_Material" -> "page::Supplier Analysis" [label="Supplier Matrix"];
+  "table::Fact Procurement" -> "page::Executive Dashboard" [label="KPI Card, Spend Trend"];
+  "table::Fact Procurement" -> "page::Supplier Analysis" [label="Supplier Matrix"];
+  "table::Fact Procurement" -> "table::Dim_Vendor" [style=dashed, color="#999999", label="Vendor -> Vendor"];
+  "table::Fact Procurement" -> "table::Dim_Material" [style=dashed, color="#999999", label="POID -> MaterialID"];
+}

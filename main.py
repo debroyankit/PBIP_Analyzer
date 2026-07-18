@@ -3,17 +3,20 @@
 Usage as a CLI:
 
     python main.py "C:/Projects/Procurement.pbip"
-    python main.py "C:/Projects/Procurement.pbip" --output ./output --json-name dependency_report.json
+    python main.py "C:/Projects/Procurement.pbip" --output ./output
+    python main.py "C:/Projects/Procurement.pbip" --table "Fact Procurement"
+    python main.py "C:/Projects/Procurement.pbip" --graph
 
 Usage as a library:
 
-    from pbip_analyzer.main import analyze_pbip
+    from main import analyze_pbip
     graph = analyze_pbip("C:/Projects/Procurement.pbip")
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import sys
 from pathlib import Path
@@ -21,14 +24,21 @@ from pathlib import Path
 from parser.pbip_loader import load_pbip_project
 from parser.report_parser import parse_report
 from parser.tmdl_parser import parse_semantic_model
-from services.dependency_engine import DependencyEngine, DependencyGraph
+from services.dependency_engine import DependencyEngine, DependencyGraph, find_unused_entities
+from services.graph_export import build_dot
 from utils.exceptions import PBIPAnalyzerError
 from utils.logging_config import configure_logging, get_logger
 
 logger = get_logger("main")
 
 
-def analyze_pbip(pbip_path: str, output_dir: str | None = None, verbose: bool = False) -> DependencyGraph:
+def analyze_pbip(
+    pbip_path: str,
+    output_dir: str | None = None,
+    verbose: bool = False,
+    table_filter: str | None = None,
+    write_graph: bool = False,
+) -> DependencyGraph:
     """Analyze a PBIP project end-to-end and write the dependency report.
 
     This is the primary programmatic entry point (importable from other
@@ -40,6 +50,12 @@ def analyze_pbip(pbip_path: str, output_dir: str | None = None, verbose: bool = 
             extended 'dependency_report_full.json' into. Defaults to
             './output' relative to the current working directory.
         verbose: Enable DEBUG-level logging.
+        table_filter: If given, the console report only prints this one
+            table (case-insensitive match) instead of every table. Has no
+            effect on what gets written to the JSON files -- those always
+            contain the full project.
+        write_graph: If True, also write 'dependency_graph.dot' (Graphviz)
+            to the output directory.
 
     Returns:
         The fully linked DependencyGraph (tables/measures/visuals/pages).
@@ -67,7 +83,10 @@ def analyze_pbip(pbip_path: str, output_dir: str | None = None, verbose: bool = 
     resolved_output_dir.mkdir(parents=True, exist_ok=True)
 
     write_json_reports(graph, resolved_output_dir)
-    print_console_report(graph)
+    if write_graph:
+        write_graph_file(graph, resolved_output_dir)
+
+    print_console_report(graph, table_filter=table_filter)
 
     return graph
 
@@ -77,19 +96,26 @@ def build_table_summary(graph: DependencyGraph) -> dict[str, dict[str, list[str]
     return {name: table.to_dict() for name, table in sorted(graph.tables.items())}
 
 
-def build_full_report(graph: DependencyGraph) -> dict[str, dict]:
-    """Build the extended, entity-complete report (tables/measures/visuals/pages).
+def build_full_report(graph: DependencyGraph) -> dict[str, object]:
+    """Build the extended, entity-complete report.
 
     This is additive detail beyond the minimum required
     'dependency_report.json' shape, kept in a separate file so the primary
     report's schema stays exactly as specified while still giving downstream
-    consumers (e.g. a future API) full access to every entity's detail.
+    consumers (e.g. a future API) full access to every entity's detail,
+    including relationships, calculated-column formulas, and unused-entity
+    hygiene checks.
     """
     return {
         "tables": {name: table.to_dict() for name, table in sorted(graph.tables.items())},
         "measures": {name: measure.to_dict() for name, measure in sorted(graph.measures.items())},
         "visuals": {vid: visual.to_dict() for vid, visual in sorted(graph.visuals.items())},
         "pages": {name: page.to_dict() for name, page in sorted(graph.pages.items())},
+        "relationships": [rel.to_dict() for rel in graph.relationships],
+        "calculated_columns": {
+            key: calc.to_dict() for key, calc in sorted(graph.calculated_columns.items()) if calc.referenced_tables
+        },
+        "unused_entities": find_unused_entities(graph),
     }
 
 
@@ -105,20 +131,80 @@ def write_json_reports(graph: DependencyGraph, output_dir: Path) -> None:
     logger.info("Wrote %s", full_path)
 
 
-def print_console_report(graph: DependencyGraph) -> None:
-    """Print the human-readable, per-table dependency report to stdout."""
-    separator = "=" * 50
+def write_graph_file(graph: DependencyGraph, output_dir: Path) -> None:
+    """Write a Graphviz DOT visualization of the table/page dependency graph."""
+    dot_path = output_dir / "dependency_graph.dot"
+    dot_path.write_text(build_dot(graph), encoding="utf-8")
+    logger.info("Wrote %s (render with: dot -Tpng %s -o graph.png)", dot_path, dot_path)
+
+
+def print_console_report(graph: DependencyGraph, table_filter: str | None = None) -> None:
+    """Print the human-readable, per-table dependency report to stdout.
+
+    Args:
+        graph: The built dependency graph.
+        table_filter: If given, only print the single matching table
+            (case-insensitive). If no exact match is found, prints the
+            closest name suggestions instead of silently printing nothing.
+    """
+    if table_filter:
+        _print_single_table(graph, table_filter)
+        return
 
     for name, table in sorted(graph.tables.items()):
-        print(separator)
-        print(f"TABLE: {name}")
+        _print_table_section(name, table)
+
+    _print_unused_entities_summary(graph)
+
+
+def _print_single_table(graph: DependencyGraph, table_filter: str) -> None:
+    match = next((name for name in graph.tables if name.lower() == table_filter.lower()), None)
+
+    if match is None:
+        print(f"Table '{table_filter}' not found in this project.")
+        suggestions = difflib.get_close_matches(table_filter, graph.tables.keys(), n=5)
+        if suggestions:
+            print("Did you mean:")
+            for suggestion in suggestions:
+                print(f"  - {suggestion}")
+        return
+
+    _print_table_section(match, graph.tables[match])
+
+
+def _print_table_section(name: str, table) -> None:  # noqa: ANN001 - Table type, avoids circular import hint noise
+    separator = "=" * 50
+    print(separator)
+    print(f"TABLE: {name}")
+    print()
+    _print_section("Columns", sorted(table.columns))
+    _print_section("Measures", sorted(table.measures))
+    _print_section("Visuals", sorted(table.visuals))
+    _print_section("Pages", sorted(table.pages))
+    _print_section("Related Tables", sorted(table.related_tables))
+    print(separator)
+    print()
+
+
+def _print_unused_entities_summary(graph: DependencyGraph) -> None:
+    unused = find_unused_entities(graph)
+    if not any(unused.values()):
+        return
+
+    print("=" * 50)
+    print("UNUSED ENTITIES (not referenced by any visual)")
+    print()
+    _print_section("Tables", unused["unused_tables"])
+    _print_section("Measures", unused["unused_measures"])
+
+    if unused["unused_columns"]:
+        print("Columns:")
+        for table_name, columns in sorted(unused["unused_columns"].items()):
+            for column in columns:
+                print(f"* {table_name}[{column}]")
         print()
-        _print_section("Columns", sorted(table.columns))
-        _print_section("Measures", sorted(table.measures))
-        _print_section("Visuals", sorted(table.visuals))
-        _print_section("Pages", sorted(table.pages))
-        print(separator)
-        print()
+
+    print("=" * 50)
 
 
 def _print_section(title: str, items: list[str]) -> None:
@@ -142,6 +228,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Directory to write dependency_report.json into (default: ./output).",
     )
+    parser.add_argument(
+        "--table",
+        dest="table_filter",
+        default=None,
+        help="Only print this one table's dependency report to the console (case-insensitive).",
+    )
+    parser.add_argument(
+        "--graph",
+        dest="write_graph",
+        action="store_true",
+        help="Also write dependency_graph.dot (Graphviz) to the output directory.",
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
     return parser
 
@@ -151,7 +249,13 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
 
     try:
-        analyze_pbip(args.pbip_path, output_dir=args.output_dir, verbose=args.verbose)
+        analyze_pbip(
+            args.pbip_path,
+            output_dir=args.output_dir,
+            verbose=args.verbose,
+            table_filter=args.table_filter,
+            write_graph=args.write_graph,
+        )
     except PBIPAnalyzerError as exc:
         logger.error(str(exc))
         print(f"Error: {exc}", file=sys.stderr)

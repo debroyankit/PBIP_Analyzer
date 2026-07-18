@@ -19,6 +19,9 @@ class Table:
             (directly, or transitively through a measure that references it).
         pages: Names of report pages that contain at least one visual using
             this table.
+        related_tables: Other tables this table is structurally connected
+            to, either via a model relationship or because a calculated
+            column's DAX formula (e.g. RELATED(...)) reaches into it.
     """
 
     name: str
@@ -26,6 +29,7 @@ class Table:
     measures: set[str] = field(default_factory=set)
     visuals: set[str] = field(default_factory=set)
     pages: set[str] = field(default_factory=set)
+    related_tables: set[str] = field(default_factory=set)
 
     def to_dict(self) -> dict[str, list[str]]:
         """Serialize to a JSON-friendly dict with deterministic ordering."""
@@ -34,4 +38,5 @@ class Table:
             "measures": sorted(self.measures),
             "visuals": sorted(self.visuals),
             "pages": sorted(self.pages),
+            "related_tables": sorted(self.related_tables),
         }
