@@ -1,0 +1,36 @@
+{
+  "name": "visKpiCard",
+  "visual": {
+    "visualType": "card",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {"SourceRef": {"Entity": "Fact Procurement"}},
+                  "Property": "Avg Spend"
+                }
+              },
+              "queryRef": "Fact Procurement.Avg Spend"
+            }
+          ]
+        }
+      }
+    },
+    "objects": {
+      "title": [
+        {
+          "properties": {
+            "text": {
+              "expr": {
+                "Literal": {"Value": "'KPI Card'"}
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

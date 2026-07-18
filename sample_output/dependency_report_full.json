@@ -1,0 +1,180 @@
+{
+  "tables": {
+    "Dim_Material": {
+      "columns": [
+        "MaterialID",
+        "StandardCost"
+      ],
+      "measures": [
+        "Purchase Price Variance"
+      ],
+      "visuals": [
+        "Supplier Matrix"
+      ],
+      "pages": [
+        "Supplier Analysis"
+      ]
+    },
+    "Dim_Vendor": {
+      "columns": [
+        "Region",
+        "Vendor"
+      ],
+      "measures": [
+        "Vendor Count"
+      ],
+      "visuals": [],
+      "pages": []
+    },
+    "Fact Procurement": {
+      "columns": [
+        "Currency",
+        "POID",
+        "Spend",
+        "Vendor"
+      ],
+      "measures": [
+        "Avg Spend",
+        "Purchase Price Variance",
+        "Total Spend"
+      ],
+      "visuals": [
+        "KPI Card",
+        "Spend Trend",
+        "Supplier Matrix"
+      ],
+      "pages": [
+        "Executive Dashboard",
+        "Supplier Analysis"
+      ]
+    }
+  },
+  "measures": {
+    "Avg Spend": {
+      "table": "Fact Procurement",
+      "dax": "AVERAGE('Fact Procurement'[Spend])",
+      "referenced_tables": [
+        "Fact Procurement"
+      ],
+      "referenced_columns": [
+        "Fact Procurement[Spend]"
+      ],
+      "visuals": [
+        "KPI Card"
+      ],
+      "pages": [
+        "Executive Dashboard"
+      ]
+    },
+    "Purchase Price Variance": {
+      "table": "Fact Procurement",
+      "dax": "VAR CurrentPrice = SUM('Fact Procurement'[Spend])\nVAR StandardPrice = SUM(Dim_Material[StandardCost])\nRETURN\nCurrentPrice - StandardPrice",
+      "referenced_tables": [
+        "Dim_Material",
+        "Fact Procurement"
+      ],
+      "referenced_columns": [
+        "Dim_Material[StandardCost]",
+        "Fact Procurement[Spend]"
+      ],
+      "visuals": [
+        "Supplier Matrix"
+      ],
+      "pages": [
+        "Supplier Analysis"
+      ]
+    },
+    "Total Spend": {
+      "table": "Fact Procurement",
+      "dax": "SUM('Fact Procurement'[Spend])",
+      "referenced_tables": [
+        "Fact Procurement"
+      ],
+      "referenced_columns": [
+        "Fact Procurement[Spend]"
+      ],
+      "visuals": [
+        "Spend Trend"
+      ],
+      "pages": [
+        "Executive Dashboard"
+      ]
+    },
+    "Vendor Count": {
+      "table": "Dim_Vendor",
+      "dax": "DISTINCTCOUNT(Dim_Vendor[Vendor])",
+      "referenced_tables": [
+        "Dim_Vendor"
+      ],
+      "referenced_columns": [
+        "Dim_Vendor[Vendor]"
+      ],
+      "visuals": [],
+      "pages": []
+    }
+  },
+  "visuals": {
+    "visKpiCard": {
+      "title": "KPI Card",
+      "type": "card",
+      "page": "Executive Dashboard",
+      "tables": [
+        "Fact Procurement"
+      ],
+      "columns": [],
+      "measures": [
+        "Avg Spend"
+      ]
+    },
+    "visSpendTrend": {
+      "title": "Spend Trend",
+      "type": "lineChart",
+      "page": "Executive Dashboard",
+      "tables": [
+        "Fact Procurement"
+      ],
+      "columns": [
+        "Fact Procurement[Currency]"
+      ],
+      "measures": [
+        "Total Spend"
+      ]
+    },
+    "visSupplierMatrix": {
+      "title": "Supplier Matrix",
+      "type": "pivotTable",
+      "page": "Supplier Analysis",
+      "tables": [
+        "Dim_Material",
+        "Fact Procurement"
+      ],
+      "columns": [
+        "Fact Procurement[Spend]",
+        "Fact Procurement[Vendor]"
+      ],
+      "measures": [
+        "Purchase Price Variance"
+      ]
+    }
+  },
+  "pages": {
+    "Executive Dashboard": {
+      "visuals": [
+        "KPI Card",
+        "Spend Trend"
+      ],
+      "tables": [
+        "Fact Procurement"
+      ]
+    },
+    "Supplier Analysis": {
+      "visuals": [
+        "Supplier Matrix"
+      ],
+      "tables": [
+        "Dim_Material",
+        "Fact Procurement"
+      ]
+    }
+  }
+}

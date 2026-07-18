@@ -1,0 +1,50 @@
+{
+  "Dim_Material": {
+    "columns": [
+      "MaterialID",
+      "StandardCost"
+    ],
+    "measures": [
+      "Purchase Price Variance"
+    ],
+    "visuals": [
+      "Supplier Matrix"
+    ],
+    "pages": [
+      "Supplier Analysis"
+    ]
+  },
+  "Dim_Vendor": {
+    "columns": [
+      "Region",
+      "Vendor"
+    ],
+    "measures": [
+      "Vendor Count"
+    ],
+    "visuals": [],
+    "pages": []
+  },
+  "Fact Procurement": {
+    "columns": [
+      "Currency",
+      "POID",
+      "Spend",
+      "Vendor"
+    ],
+    "measures": [
+      "Avg Spend",
+      "Purchase Price Variance",
+      "Total Spend"
+    ],
+    "visuals": [
+      "KPI Card",
+      "Spend Trend",
+      "Supplier Matrix"
+    ],
+    "pages": [
+      "Executive Dashboard",
+      "Supplier Analysis"
+    ]
+  }
+}

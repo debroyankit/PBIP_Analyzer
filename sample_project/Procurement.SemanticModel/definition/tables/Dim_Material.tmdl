@@ -1,0 +1,15 @@
+table Dim_Material
+
+	column MaterialID
+		dataType: string
+		summarizeBy: none
+		sourceColumn: MaterialID
+
+	column StandardCost
+		dataType: double
+		summarizeBy: sum
+		sourceColumn: StandardCost
+
+	partition Dim_Material = m
+		mode: import
+		source = let Source = 1 in Source

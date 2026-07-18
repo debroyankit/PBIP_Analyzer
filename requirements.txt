@@ -1,0 +1,7 @@
+# pbip_analyzer has no third-party runtime dependencies -- it relies only on
+# the Python 3.12+ standard library (json, re, pathlib, dataclasses, argparse,
+# logging). This keeps the tool trivially embeddable inside any environment,
+# including a future FastAPI backend, without dependency conflicts.
+
+# Development / testing only:
+pytest>=8.0

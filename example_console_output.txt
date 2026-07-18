@@ -1,0 +1,61 @@
+==================================================
+TABLE: Dim_Material
+
+Columns:
+* MaterialID
+* StandardCost
+
+Measures:
+* Purchase Price Variance
+
+Visuals:
+* Supplier Matrix
+
+Pages:
+* Supplier Analysis
+
+==================================================
+
+==================================================
+TABLE: Dim_Vendor
+
+Columns:
+* Region
+* Vendor
+
+Measures:
+* Vendor Count
+
+Visuals:
+  (none)
+
+Pages:
+  (none)
+
+==================================================
+
+==================================================
+TABLE: Fact Procurement
+
+Columns:
+* Currency
+* POID
+* Spend
+* Vendor
+
+Measures:
+* Avg Spend
+* Purchase Price Variance
+* Total Spend
+
+Visuals:
+* KPI Card
+* Spend Trend
+* Supplier Matrix
+
+Pages:
+* Executive Dashboard
+* Supplier Analysis
+
+==================================================
+

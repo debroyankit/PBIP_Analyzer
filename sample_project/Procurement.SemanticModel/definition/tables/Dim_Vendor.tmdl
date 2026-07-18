@@ -1,0 +1,18 @@
+table Dim_Vendor
+
+	column Vendor
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Vendor
+
+	column Region
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Region
+
+	measure 'Vendor Count' = DISTINCTCOUNT(Dim_Vendor[Vendor])
+		formatString: "0"
+
+	partition Dim_Vendor = m
+		mode: import
+		source = let Source = 1 in Source

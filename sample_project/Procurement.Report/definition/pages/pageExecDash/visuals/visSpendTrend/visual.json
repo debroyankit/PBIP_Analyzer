@@ -1,0 +1,49 @@
+{
+  "name": "visSpendTrend",
+  "visual": {
+    "visualType": "lineChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {"SourceRef": {"Entity": "Fact Procurement"}},
+                  "Property": "Currency"
+                }
+              },
+              "queryRef": "Fact Procurement.Currency"
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {"SourceRef": {"Entity": "Fact Procurement"}},
+                  "Property": "Total Spend"
+                }
+              },
+              "queryRef": "Fact Procurement.Total Spend"
+            }
+          ]
+        }
+      }
+    },
+    "objects": {
+      "title": [
+        {
+          "properties": {
+            "text": {
+              "expr": {
+                "Literal": {"Value": "'Spend Trend'"}
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

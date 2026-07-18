@@ -1,0 +1,7 @@
+relationship a1b2c3
+	fromColumn: 'Fact Procurement'.Vendor
+	toColumn: Dim_Vendor.Vendor
+
+relationship d4e5f6
+	fromColumn: 'Fact Procurement'.POID
+	toColumn: Dim_Material.MaterialID
