@@ -137,7 +137,7 @@ def _write_row(ws, row_idx: int, values: list, wrap_cols: set[int] | None = None
 def _build_sheet1(wb: Workbook, graph: DependencyGraph, exclude_system: bool) -> None:
     ws = wb.create_sheet("Table Dependency Summary")
 
-    headers = ["Table", "Columns", "Measures", "Visuals (Page)", "Total Measures", "Total Visuals"]
+    headers = ["Table", "Columns", "Measures", "Visuals (Page)"]
     ws.append(headers)
     _style_header(ws, len(headers))
 
@@ -172,16 +172,11 @@ def _build_sheet1(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
                 cols_str,
                 measures_str,
                 visuals_str,
-                len(table.measures),
-                len(table.visuals),
             ],
             wrap_cols=WRAP,
         )
 
     _auto_width(ws)
-    # Give fixed widths to the count columns
-    ws.column_dimensions["E"].width = 16
-    ws.column_dimensions["F"].width = 14
 
 
 # ---------------------------------------------------------------------------

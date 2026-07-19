@@ -51,7 +51,7 @@ def parse_visual(visual_json: dict[str, Any], visual_id: str) -> RawVisual:
         reference pairs.
     """
     visual_type = _extract_visual_type(visual_json)
-    title = _extract_title(visual_json) or f"{visual_type or 'visual'} ({visual_id})"
+    title = _extract_title(visual_json) or (visual_type or "visual")
     field_refs = set(_extract_field_refs(visual_json))
 
     return RawVisual(id=visual_id, title=title, type=visual_type or "unknown", raw_field_refs=field_refs)
