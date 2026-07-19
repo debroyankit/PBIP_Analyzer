@@ -50,12 +50,14 @@ class CalculatedColumn:
     column: str
     expression: str
     referenced_tables: set[str] = field(default_factory=set)
+    referenced_columns: set[str] = field(default_factory=set)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "table": self.table,
             "expression": self.expression,
             "referenced_tables": sorted(self.referenced_tables),
+            "referenced_columns": sorted(self.referenced_columns),
         }
 
 
@@ -192,6 +194,7 @@ class DependencyEngine:
                     column=raw_column.name,
                     expression=raw_column.expression,
                     referenced_tables=referenced_tables,
+                    referenced_columns=set(dax_refs.qualified_columns),
                 )
 
                 if not referenced_tables:
@@ -249,7 +252,7 @@ class DependencyEngine:
 
                 visual = Visual(
                     id=raw_visual.id,
-                    title=raw_visual.title,
+                    title=f"{raw_visual.title} (Page: {page.name})",
                     type=raw_visual.type,
                     page=page.name,
                     raw_field_refs=set(raw_visual.raw_field_refs),
@@ -318,31 +321,80 @@ class DependencyEngine:
 def find_unused_entities(graph: DependencyGraph) -> dict[str, object]:
     """Identify tables, measures, and columns that appear unused in the report.
 
-    "Unused" means never referenced by any visual -- a useful model-hygiene
-    signal (e.g. a table imported but never surfaced, or a measure someone
-    built and then abandoned). This is purely a report on top of the already
+    "Unused" means never referenced by any visual (transitively for measures,
+    and considering relationships/DAX/calculated columns for columns) -- a
+    useful model-hygiene signal. This is purely a report on top of the already
     -built graph; it does not mutate anything.
 
     Returns:
         A dict with three keys:
             - "unused_tables": table names with no visuals.
-            - "unused_measures": measure names with no visuals.
+            - "unused_measures": measure names with no visuals (transitively).
             - "unused_columns": {table_name: [column_names]} for tables that
-              have at least one column never referenced by any visual.
+              have at least one column never referenced.
     """
-    unused_tables = sorted(name for name, table in graph.tables.items() if not table.visuals)
-    unused_measures = sorted(name for name, measure in graph.measures.items() if not measure.visuals)
-
-    used_columns_by_table: dict[str, set[str]] = {name: set() for name in graph.tables}
+    # 1. Trace used measures transitively
+    used_measures: set[str] = set()
+    queue_measures: list[str] = []
     for visual in graph.visuals.values():
-        for qualified_column in visual.columns:
-            table_name, _, column_name = qualified_column.partition("[")
-            column_name = column_name.rstrip("]")
-            used_columns_by_table.setdefault(table_name, set()).add(column_name)
+        for m in visual.measures:
+            if m in graph.measures and m not in used_measures:
+                used_measures.add(m)
+                queue_measures.append(m)
+
+    while queue_measures:
+        current_m = queue_measures.pop(0)
+        measure_obj = graph.measures[current_m]
+        for dep in measure_obj.depends_on_measures:
+            if dep in graph.measures and dep not in used_measures:
+                used_measures.add(dep)
+                queue_measures.append(dep)
+
+    unused_tables = sorted(name for name, table in graph.tables.items() if not table.visuals)
+    unused_measures = sorted(name for name in graph.measures if name not in used_measures)
+
+    # 2. Trace used columns
+    used_columns: set[str] = set()
+
+    # Columns directly referenced in visuals
+    for visual in graph.visuals.values():
+        for col in visual.columns:
+            used_columns.add(col)
+
+    # Columns referenced by used measures
+    for m in used_measures:
+        measure_obj = graph.measures[m]
+        for ref_col in measure_obj.referenced_columns:
+            used_columns.add(ref_col)
+
+    # Columns used in relationships
+    for rel in graph.relationships:
+        used_columns.add(f"{rel.from_table}[{rel.from_column}]")
+        used_columns.add(f"{rel.to_table}[{rel.to_column}]")
+
+    # Columns referenced by used calculated columns (trace recursively)
+    queue_columns = list(used_columns)
+    visited_calc_cols: set[str] = set()
+
+    while queue_columns:
+        current_col = queue_columns.pop(0)
+        if current_col in graph.calculated_columns and current_col not in visited_calc_cols:
+            visited_calc_cols.add(current_col)
+            calc_col = graph.calculated_columns[current_col]
+            for ref_col in calc_col.referenced_columns:
+                if ref_col not in used_columns:
+                    used_columns.add(ref_col)
+                    queue_columns.append(ref_col)
 
     unused_columns: dict[str, list[str]] = {}
     for table_name, table in graph.tables.items():
-        unused = sorted(table.columns - used_columns_by_table.get(table_name, set()))
+        table_prefix = f"{table_name}["
+        table_used = set()
+        for col in used_columns:
+            if col.startswith(table_prefix) and col.endswith("]"):
+                col_name = col[len(table_prefix):-1]
+                table_used.add(col_name)
+        unused = sorted(table.columns - table_used)
         if unused:
             unused_columns[table_name] = unused
 

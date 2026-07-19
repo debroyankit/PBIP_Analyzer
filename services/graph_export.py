@@ -20,7 +20,7 @@ def _escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def build_dot(graph: DependencyGraph) -> str:
+def build_dot(graph: DependencyGraph, exclude_system: bool = False) -> str:
     """Build a Graphviz DOT document for the given dependency graph.
 
     Nodes:
@@ -35,14 +35,20 @@ def build_dot(graph: DependencyGraph) -> str:
 
     Args:
         graph: A fully built DependencyGraph.
+        exclude_system: If True, exclude auto-generated LocalDateTable/DateTableTemplate tables.
 
     Returns:
         DOT source text.
     """
     lines: list[str] = ["digraph PBIPDependencies {", '  rankdir="LR";', "  node [fontname=\"Helvetica\"];"]
 
+    def is_system_table(name: str) -> bool:
+        return name.startswith("LocalDateTable_") or name.startswith("DateTableTemplate_")
+
     # Table nodes
     for table_name in sorted(graph.tables):
+        if exclude_system and is_system_table(table_name):
+            continue
         lines.append(f'  "table::{_escape(table_name)}" [label="{_escape(table_name)}", shape=box, style=filled, fillcolor="#cfe2f3"];')
 
     # Page nodes
@@ -53,6 +59,8 @@ def build_dot(graph: DependencyGraph) -> str:
 
     # Table -> Page edges, labeled with the connecting visual title(s)
     for table_name, table in sorted(graph.tables.items()):
+        if exclude_system and is_system_table(table_name):
+            continue
         for page_name in sorted(table.pages):
             page = graph.pages.get(page_name)
             shared_visuals = sorted(table.visuals & page.visuals) if page else []
@@ -66,6 +74,8 @@ def build_dot(graph: DependencyGraph) -> str:
     for rel in graph.relationships:
         if not rel.from_table or not rel.to_table:
             continue
+        if exclude_system and (is_system_table(rel.from_table) or is_system_table(rel.to_table)):
+            continue
         pair = tuple(sorted((rel.from_table, rel.to_table)))
         if pair in seen_pairs:
             continue
@@ -78,7 +88,11 @@ def build_dot(graph: DependencyGraph) -> str:
     # Table -> Table edges (calculated-column dependencies not already
     # covered by a relationship above)
     for calc_column in graph.calculated_columns.values():
+        if exclude_system and is_system_table(calc_column.table):
+            continue
         for other_table in calc_column.referenced_tables:
+            if exclude_system and is_system_table(other_table):
+                continue
             pair = tuple(sorted((calc_column.table, other_table)))
             if pair in seen_pairs:
                 continue

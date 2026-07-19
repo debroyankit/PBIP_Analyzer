@@ -3,5 +3,10 @@
 # logging). This keeps the tool trivially embeddable inside any environment,
 # including a future FastAPI backend, without dependency conflicts.
 
+# Streamlit web UI:
+streamlit>=1.36
+graphviz>=0.20
+plotly>=5.18
+
 # Development / testing only:
 pytest>=8.0

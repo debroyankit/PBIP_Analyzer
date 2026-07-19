@@ -86,7 +86,7 @@ def test_visual_expands_tables_through_measure():
 def test_page_aggregates_visual_tables():
     graph = _build_graph()
     page = graph.pages["Home"]
-    assert "Sales Card" in page.visuals
+    assert "Sales Card (Page: Home)" in page.visuals
     assert page.tables == {"Sales"}
 
 
@@ -126,5 +126,24 @@ def test_find_unused_entities_reports_unqueried_table_and_measure():
     # "Variance" and "Total Sales Rounded" measures are never used by a visual.
     assert "Variance" in unused["unused_measures"]
     assert "Total Sales Rounded" in unused["unused_measures"]
-    # "Region" column on Sales is never queried by any visual.
-    assert "Region" in unused["unused_columns"].get("Sales", [])
+    # "Region" column on Sales is used in a relationship, so it should not be reported as unused.
+    assert "Region" not in unused["unused_columns"].get("Sales", [])
+    # "SalesRegionName" calculated column on Region is never queried, so it is unused.
+    assert "SalesRegionName" in unused["unused_columns"].get("Region", [])
+
+
+def test_transitive_unused_entities_and_system_filtering():
+    from main import is_system_table
+
+    # 1. Verify system table identifier works
+    assert is_system_table("LocalDateTable_1afc3cbb-645a-4716-b8f1-81b44dd03210") is True
+    assert is_system_table("DateTableTemplate_9026e257-1032-4e83-b623-381c584ebfac") is True
+    assert is_system_table("Fact Sales") is False
+
+    # 2. Verify transitive column usage works
+    graph = _build_graph()
+    unused = find_unused_entities(graph)
+
+    # "Amount" column on Sales is referenced in "Total Sales" measure, which is in visual "v1".
+    # So "Amount" should not be marked as unused.
+    assert "Amount" not in unused["unused_columns"].get("Sales", [])
