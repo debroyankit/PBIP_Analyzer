@@ -25,6 +25,7 @@ from parser.pbip_loader import load_pbip_project
 from parser.report_parser import parse_report
 from parser.tmdl_parser import parse_semantic_model
 from services.dependency_engine import DependencyEngine, DependencyGraph, find_unused_entities
+from services.excel_export import write_excel_report
 from services.graph_export import build_dot
 from utils.exceptions import PBIPAnalyzerError
 from utils.logging_config import configure_logging, get_logger
@@ -43,6 +44,7 @@ def analyze_pbip(
     verbose: bool = False,
     table_filter: str | None = None,
     write_graph: bool = False,
+    write_excel: bool = True,
     exclude_system: bool = False,
     no_color: bool = False,
     output_format: str = "text",
@@ -64,6 +66,9 @@ def analyze_pbip(
             contain the full project.
         write_graph: If True, also write 'dependency_graph.dot' (Graphviz)
             to the output directory.
+        write_excel: If True, write 'dependency_report.xlsx' to the output
+            directory (3-sheet workbook with table summary, detailed mapping,
+            and DAX lineage).
         exclude_system: If True, filter out auto-generated LocalDateTable/DateTableTemplate tables.
         no_color: Disable ANSI color formatting in terminal outputs.
         output_format: Output format for the console ('text' or 'markdown').
@@ -93,9 +98,10 @@ def analyze_pbip(
     resolved_output_dir = Path(output_dir).expanduser().resolve() if output_dir else Path.cwd() / "output"
     resolved_output_dir.mkdir(parents=True, exist_ok=True)
 
-    write_json_reports(graph, resolved_output_dir, exclude_system=exclude_system)
     if write_graph:
         write_graph_file(graph, resolved_output_dir, exclude_system=exclude_system)
+    if write_excel:
+        write_excel_file(graph, resolved_output_dir, exclude_system=exclude_system)
 
     print_console_report(
         graph,
@@ -206,6 +212,13 @@ def write_graph_file(graph: DependencyGraph, output_dir: Path, exclude_system: b
     dot_path = output_dir / "dependency_graph.dot"
     dot_path.write_text(build_dot(graph, exclude_system=exclude_system), encoding="utf-8")
     logger.info("Wrote %s (render with: dot -Tpng %s -o graph.png)", dot_path, dot_path)
+
+
+def write_excel_file(graph: DependencyGraph, output_dir: Path, exclude_system: bool = False) -> None:
+    """Write the 3-sheet Excel dependency workbook to the output directory."""
+    excel_path = output_dir / "dependency_report.xlsx"
+    write_excel_report(graph, output_path=excel_path, exclude_system=exclude_system)
+    logger.info("Wrote %s", excel_path)
 
 
 def _color(text: str, color_code: str, no_color: bool) -> str:
@@ -436,6 +449,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Also write dependency_graph.dot (Graphviz) to the output directory.",
     )
     parser.add_argument(
+        "--no-excel",
+        dest="write_excel",
+        action="store_false",
+        help="Do not write the 3-sheet Excel workbook (dependency_report.xlsx) to the output directory.",
+    )
+    parser.add_argument(
         "--exclude-system",
         dest="exclude_system",
         action="store_true",
@@ -469,6 +488,7 @@ def main(argv: list[str] | None = None) -> int:
             verbose=args.verbose,
             table_filter=args.table_filter,
             write_graph=args.write_graph,
+            write_excel=args.write_excel,
             exclude_system=args.exclude_system,
             no_color=args.no_color,
             output_format=args.output_format,

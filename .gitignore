@@ -142,3 +142,8 @@ cython_debug/
 # OS-specific metadata
 .DS_Store
 Thumbs.db
+
+# Output reports and archives
+*.xlsx
+*.zip
+

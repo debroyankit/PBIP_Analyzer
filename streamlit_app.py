@@ -7,7 +7,6 @@ Run with:
 from __future__ import annotations
 
 import io
-import json
 import tempfile
 import zipfile
 from pathlib import Path
@@ -23,9 +22,9 @@ _project_root = Path(__file__).resolve().parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from main import analyze_pbip, build_table_summary, build_full_report, is_system_table
+from main import analyze_pbip, is_system_table
 from services.dependency_engine import DependencyGraph, find_unused_entities
-from services.graph_export import build_dot
+from services.excel_export import write_excel_report
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Page config
@@ -375,31 +374,14 @@ with st.sidebar:
         st.markdown("## 📥 Downloads")
         graph: DependencyGraph = st.session_state["graph"]
 
-        primary_json = json.dumps(build_table_summary(graph, exclude_system=exclude_system), indent=2)
+        excel_bytes = write_excel_report(graph, exclude_system=exclude_system)
         st.download_button(
-            "⬇ dependency_report.json",
-            data=primary_json,
-            file_name="dependency_report.json",
-            mime="application/json",
+            "⬇ dependency_report.xlsx",
+            data=excel_bytes,
+            file_name="dependency_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
-        )
-
-        full_json = json.dumps(build_full_report(graph, exclude_system=exclude_system), indent=2)
-        st.download_button(
-            "⬇ dependency_report_full.json",
-            data=full_json,
-            file_name="dependency_report_full.json",
-            mime="application/json",
-            use_container_width=True,
-        )
-
-        dot_src = build_dot(graph, exclude_system=exclude_system)
-        st.download_button(
-            "⬇ dependency_graph.dot",
-            data=dot_src,
-            file_name="dependency_graph.dot",
-            mime="text/plain",
-            use_container_width=True,
+            help="3-sheet workbook: Table Summary · Detailed Mapping · DAX Lineage",
         )
 
 
@@ -788,25 +770,6 @@ with tab_unused:
         for tname, cols in sorted(unused_columns.items()):
             with st.expander(f"**{tname}** — {len(cols)} unused columns"):
                 st.markdown(_render_badge_list(sorted(cols), "purple"), unsafe_allow_html=True)
-
-    # CSV download of all unused entities
-    if unused_tables or unused_measures or unused_columns:
-        csv_lines = ["Type,Entity"]
-        for t in unused_tables:
-            csv_lines.append(f"Table,{t}")
-        for m in unused_measures:
-            csv_lines.append(f"Measure,{m}")
-        for tname, cols in sorted(unused_columns.items()):
-            for c in sorted(cols):
-                csv_lines.append(f"Column,{tname}[{c}]")
-        csv_content = "\n".join(csv_lines)
-        st.download_button(
-            "⬇ Download unused entities CSV",
-            data=csv_content,
-            file_name="unused_entities.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
 
     if not unused_tables and not unused_measures and not unused_columns:
         st.success("🎉 No unused entities found — your model is clean!")
