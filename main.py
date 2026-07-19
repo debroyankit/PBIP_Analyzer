@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import difflib
-import json
 import sys
 from pathlib import Path
 
@@ -79,6 +78,10 @@ def analyze_pbip(
     Raises:
         PBIPAnalyzerError (or a subclass): On any expected failure such as an
             invalid path, missing semantic model/report, or corrupt files.
+
+    Note:
+        JSON and CSV outputs are not generated. Only the Excel workbook is
+        written (to ~/Downloads/dependency_report.xlsx automatically).
     """
     configure_logging(verbose=verbose)
     logger.info("Analyzing PBIP project: %s", pbip_path)
@@ -114,99 +117,6 @@ def analyze_pbip(
     return graph
 
 
-def build_table_summary(graph: DependencyGraph, exclude_system: bool = False) -> dict[str, dict[str, list[str]]]:
-    """Build the primary table-keyed summary matching the required output shape."""
-    summary = {}
-    for name, table in sorted(graph.tables.items()):
-        if exclude_system and is_system_table(name):
-            continue
-        table_dict = table.to_dict()
-        if exclude_system:
-            table_dict["related_tables"] = [t for t in table_dict["related_tables"] if not is_system_table(t)]
-        summary[name] = table_dict
-    return summary
-
-
-def build_full_report(graph: DependencyGraph, exclude_system: bool = False) -> dict[str, object]:
-    """Build the extended, entity-complete report."""
-    tables = {}
-    for name, table in sorted(graph.tables.items()):
-        if exclude_system and is_system_table(name):
-            continue
-        table_dict = table.to_dict()
-        if exclude_system:
-            table_dict["related_tables"] = [t for t in table_dict["related_tables"] if not is_system_table(t)]
-        tables[name] = table_dict
-
-    measures = {}
-    for name, measure in sorted(graph.measures.items()):
-        if exclude_system and is_system_table(measure.table):
-            continue
-        measure_dict = measure.to_dict()
-        if exclude_system:
-            measure_dict["referenced_tables"] = [t for t in measure_dict["referenced_tables"] if not is_system_table(t)]
-            measure_dict["referenced_columns"] = [c for c in measure_dict["referenced_columns"] if not is_system_table(c.partition("[")[0])]
-        measures[name] = measure_dict
-
-    visuals = {}
-    for vid, visual in sorted(graph.visuals.items()):
-        visual_dict = visual.to_dict()
-        if exclude_system:
-            visual_dict["tables"] = [t for t in visual_dict["tables"] if not is_system_table(t)]
-            visual_dict["columns"] = [c for c in visual_dict["columns"] if not is_system_table(c.partition("[")[0])]
-        visuals[vid] = visual_dict
-
-    pages = {}
-    for name, page in sorted(graph.pages.items()):
-        page_dict = page.to_dict()
-        if exclude_system:
-            page_dict["tables"] = [t for t in page_dict["tables"] if not is_system_table(t)]
-        pages[name] = page_dict
-
-    relationships = []
-    for rel in graph.relationships:
-        if exclude_system and (is_system_table(rel.from_table) or is_system_table(rel.to_table)):
-            continue
-        relationships.append(rel.to_dict())
-
-    calculated_columns = {}
-    for key, calc in sorted(graph.calculated_columns.items()):
-        if exclude_system and (is_system_table(calc.table) or any(is_system_table(t) for t in calc.referenced_tables)):
-            continue
-        calc_dict = calc.to_dict()
-        if exclude_system:
-            calc_dict["referenced_tables"] = [t for t in calc_dict["referenced_tables"] if not is_system_table(t)]
-            calc_dict["referenced_columns"] = [c for c in calc_dict["referenced_columns"] if not is_system_table(c.partition("[")[0])]
-        calculated_columns[key] = calc_dict
-
-    unused = find_unused_entities(graph)
-    if exclude_system:
-        unused["unused_tables"] = [t for t in unused["unused_tables"] if not is_system_table(t)]
-        unused["unused_columns"] = {t: cols for t, cols in unused["unused_columns"].items() if not is_system_table(t)}
-
-    return {
-        "tables": tables,
-        "measures": measures,
-        "visuals": visuals,
-        "pages": pages,
-        "relationships": relationships,
-        "calculated_columns": calculated_columns,
-        "unused_entities": unused,
-    }
-
-
-def write_json_reports(graph: DependencyGraph, output_dir: Path, exclude_system: bool = False) -> None:
-    """Write both the primary and extended JSON reports to `output_dir`."""
-    primary_path = output_dir / "dependency_report.json"
-    full_path = output_dir / "dependency_report_full.json"
-
-    primary_path.write_text(json.dumps(build_table_summary(graph, exclude_system=exclude_system), indent=2), encoding="utf-8")
-    full_path.write_text(json.dumps(build_full_report(graph, exclude_system=exclude_system), indent=2), encoding="utf-8")
-
-    logger.info("Wrote %s", primary_path)
-    logger.info("Wrote %s", full_path)
-
-
 def write_graph_file(graph: DependencyGraph, output_dir: Path, exclude_system: bool = False) -> None:
     """Write a Graphviz DOT visualization of the table/page dependency graph."""
     dot_path = output_dir / "dependency_graph.dot"
@@ -215,10 +125,13 @@ def write_graph_file(graph: DependencyGraph, output_dir: Path, exclude_system: b
 
 
 def write_excel_file(graph: DependencyGraph, output_dir: Path, exclude_system: bool = False) -> None:
-    """Write the 3-sheet Excel dependency workbook to the output directory."""
+    """Write the 3-sheet Excel workbook.
+
+    The workbook is always saved to ~/Downloads/dependency_report.xlsx.
+    An additional copy is also placed in ``output_dir`` for reference.
+    """
     excel_path = output_dir / "dependency_report.xlsx"
     write_excel_report(graph, output_path=excel_path, exclude_system=exclude_system)
-    logger.info("Wrote %s", excel_path)
 
 
 def _color(text: str, color_code: str, no_color: bool) -> str:

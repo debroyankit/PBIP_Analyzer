@@ -46,28 +46,56 @@ class PBIPProject:
 def load_pbip_project(pbip_path_str: str) -> PBIPProject:
     """Validate a .pbip path and resolve its Report/SemanticModel folders.
 
+    Accepts either:
+      - A direct path to a ``.pbip`` file, e.g.
+            ``C:/Projects/MyReport/MyReport.pbip``
+      - A folder path that *contains* a ``.pbip`` file, e.g.
+            ``C:/Projects/MyReport``
+        In this case the loader will auto-discover the single ``.pbip`` file
+        inside the folder (raises an error if none or multiple are found).
+
     Args:
-        pbip_path_str: Path to the .pbip file (as given on the CLI or API).
+        pbip_path_str: Path to the .pbip file **or** the folder that
+            contains it (as given on the CLI or API).
 
     Returns:
         A populated PBIPProject with resolved, existing directories.
 
     Raises:
-        InvalidPBIPFileError: If the path doesn't exist, isn't a .pbip file,
-            or the pointer file is corrupt.
+        InvalidPBIPFileError: If the path doesn't exist, isn't a .pbip file
+            (or a folder containing exactly one), or the pointer file is
+            corrupt.
         ReportNotFoundError: If the report folder can't be located.
         SemanticModelNotFoundError: If the semantic model folder can't be
             located.
     """
-    pbip_path = Path(pbip_path_str).expanduser().resolve()
+    given = Path(pbip_path_str).expanduser().resolve()
 
-    if pbip_path.suffix.lower() != ".pbip":
-        raise InvalidPBIPFileError(
-            f"Expected a '.pbip' file, got: '{pbip_path}'. "
-            "PBIX files are not supported by this tool."
-        )
-    if not pbip_path.is_file():
-        raise InvalidPBIPFileError(f".pbip file not found: '{pbip_path}'")
+    # --- Resolve to an actual .pbip file ---
+    if given.is_dir():
+        # Auto-discover the .pbip file inside the folder
+        candidates = list(given.glob("*.pbip"))
+        if not candidates:
+            raise InvalidPBIPFileError(
+                f"No '.pbip' file found inside folder: '{given}'."
+            )
+        if len(candidates) > 1:
+            names = ", ".join(p.name for p in candidates)
+            raise InvalidPBIPFileError(
+                f"Multiple '.pbip' files found inside '{given}': {names}. "
+                "Please provide the path to the specific .pbip file."
+            )
+        pbip_path = candidates[0]
+        logger.info("Auto-discovered .pbip file: %s", pbip_path)
+    else:
+        pbip_path = given
+        if pbip_path.suffix.lower() != ".pbip":
+            raise InvalidPBIPFileError(
+                f"Expected a '.pbip' file or a folder containing one, got: '{pbip_path}'. "
+                "PBIX files are not supported by this tool."
+            )
+        if not pbip_path.is_file():
+            raise InvalidPBIPFileError(f".pbip file not found: '{pbip_path}'")
 
     project_root = pbip_path.parent
     pbip_content = read_json_safe(pbip_path)
