@@ -86,7 +86,7 @@ def test_visual_expands_tables_through_measure():
 def test_page_aggregates_visual_tables():
     graph = _build_graph()
     page = graph.pages["Home"]
-    assert "Sales Card (Page: Home)" in page.visuals
+    assert "Sales Card" in page.visuals
     assert page.tables == {"Sales"}
 
 

@@ -16,7 +16,7 @@ git-friendly, folder-based format Power BI Desktop can save to via
 
 ```bash
 pip install -r requirements.txt   # only needed for running the test suite
-python main.py "C:/Projects/Procurement"
+python main.py "C:/Projects/Sales"
 ```
 
 This will:
@@ -34,19 +34,19 @@ Useful flags:
 
 ```bash
 # Custom output directory (in addition to the Downloads copy)
-python main.py "C:/Projects/Procurement" --output ./reports
+python main.py "C:/Projects/Sales" --output ./reports
 
 # Only print one table's dependency report to the console
-python main.py "C:/Projects/Procurement" --table "Fact Procurement"
+python main.py "C:/Projects/Sales" --table "Fact_Sales"
 
 # Also emit a Graphviz DOT file (dependency_graph.dot) for a visual diagram
-python main.py "C:/Projects/Procurement" --graph
+python main.py "C:/Projects/Sales" --graph
 
 # Do not write the Excel workbook
-python main.py "C:/Projects/Procurement" --no-excel
+python main.py "C:/Projects/Sales" --no-excel
 
 # Debug logging
-python main.py "C:/Projects/Procurement" --verbose
+python main.py "C:/Projects/Sales" --verbose
 ```
 
 Render the graph with Graphviz once installed:
@@ -60,8 +60,8 @@ dot -Tpng output/dependency_graph.dot -o dependency_graph.png
 ```python
 from main import analyze_pbip
 
-graph = analyze_pbip("C:/Projects/Procurement.pbip")
-print(graph.tables["Fact Procurement"].measures)
+graph = analyze_pbip("C:/Projects/Sales.pbip")
+print(graph.tables["Fact_Sales"].measures)
 ```
 
 `analyze_pbip` never uses hardcoded absolute paths — folder discovery is
@@ -144,9 +144,9 @@ FastAPI endpoint without touching parsing logic.
   table (so measures with a trivial `= 1` body are still attributed).
 - A table's **visuals** = every visual that either (a) directly queries a
   column/measure from that table, or (b) uses a *measure* whose DAX
-  expression transitively touches that table (e.g. a visual showing "Purchase
-  Price Variance", whose DAX references both `Fact Procurement` and
-  `Dim_Material`, is correctly linked to **both** tables).
+  expression transitively touches that table (e.g. a visual showing "Sales
+  Variance", whose DAX references both `Fact_Sales` and
+  `Products`, is correctly linked to **both** tables).
 - A table's **pages** = the pages containing any of the visuals above.
 - A table's **related_tables** = every other table it's structurally
   connected to, from two sources:
@@ -214,31 +214,31 @@ shape.
 
 ```
 ==================================================
-TABLE: Fact Procurement
+TABLE: Fact_Sales
 
 Columns:
 * Currency
-* POID
-* Spend
-* Vendor
+* OrderID
+* SalesAmount
+* Customer
 
 Measures:
-* Avg Spend
-* Purchase Price Variance
-* Total Spend
+* Avg Sales
+* Sales Variance
+* Total Sales
 
 Visuals:
 * KPI Card
-* Spend Trend
-* Supplier Matrix
+* Sales Trend
+* Customer Matrix
 
 Pages:
 * Executive Dashboard
-* Supplier Analysis
+* Customer Analysis
 
 Related Tables:
-* Dim_Material
-* Dim_Vendor
+* Products
+* Customers
 
 ==================================================
 ```
@@ -250,17 +250,17 @@ A final section flags anything never used by a visual:
 UNUSED ENTITIES (not referenced by any visual)
 
 Tables:
-* Dim_Vendor
+* Customers
 
 Measures:
-* Vendor Count
+* Customer Count
 
 Columns:
-* Dim_Material[MaterialID]
-* Dim_Material[StandardCost]
-* Dim_Vendor[Region]
-* Dim_Vendor[Vendor]
-* Fact Procurement[POID]
+* Products[ProductID]
+* Products[Price]
+* Customers[Region]
+* Customers[CustomerName]
+* Fact_Sales[OrderID]
 
 ==================================================
 ```

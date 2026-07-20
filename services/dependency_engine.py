@@ -252,7 +252,7 @@ class DependencyEngine:
 
                 visual = Visual(
                     id=raw_visual.id,
-                    title=f"{raw_visual.title} (Page: {page.name})",
+                    title=raw_visual.title,
                     type=raw_visual.type,
                     page=page.name,
                     raw_field_refs=set(raw_visual.raw_field_refs),
@@ -403,3 +403,66 @@ def find_unused_entities(graph: DependencyGraph) -> dict[str, object]:
         "unused_measures": unused_measures,
         "unused_columns": unused_columns,
     }
+
+
+def trace_measure_lineage(
+    measure: Measure, graph: DependencyGraph
+) -> tuple[set[str], set[str]]:
+    """Return (tables, columns) a measure ultimately depends on, transitively
+    through every measure it calls (measure.depends_on_measures), with
+    calculated-column references resolved down to their base columns.
+
+    ``columns`` uses "Table[Column]" format; entries reached only via a
+    calculated column's RELATED()/RELATEDTABLE() formula are suffixed " (calc)".
+    """
+    # 1. Walk depends_on_measures transitively (BFS)
+    all_measures_in_chain: list[Measure] = [measure]
+    visited_measures: set[str] = {measure.name}
+    queue: list[str] = list(measure.depends_on_measures)
+
+    while queue:
+        dep_name = queue.pop(0)
+        if dep_name in visited_measures:
+            continue
+        visited_measures.add(dep_name)
+        dep_measure = graph.measures.get(dep_name)
+        if dep_measure is not None:
+            all_measures_in_chain.append(dep_measure)
+            for sub_dep in dep_measure.depends_on_measures:
+                if sub_dep not in visited_measures:
+                    queue.append(sub_dep)
+
+    # 2. Union referenced_tables and referenced_columns from every measure
+    tables: set[str] = set()
+    columns: set[str] = set()
+    for m in all_measures_in_chain:
+        tables |= m.referenced_tables
+        columns |= m.referenced_columns
+
+    # 3. Resolve calculated-column references to their base columns
+    #    Reuses the exact BFS pattern from find_unused_entities.
+    col_queue = list(columns)
+    visited_calc_cols: set[str] = set()
+    calc_derived_columns: set[str] = set()
+
+    while col_queue:
+        current_col = col_queue.pop(0)
+        if current_col in graph.calculated_columns and current_col not in visited_calc_cols:
+            visited_calc_cols.add(current_col)
+            calc_col = graph.calculated_columns[current_col]
+            # Add the calculated column's own referenced tables
+            tables |= calc_col.referenced_tables
+            for ref_col in calc_col.referenced_columns:
+                if ref_col not in columns:
+                    # Mark as calc-derived
+                    calc_derived_columns.add(ref_col)
+                    col_queue.append(ref_col)
+
+    # 4. Build final columns set with (calc) suffix for calc-derived entries
+    final_columns: set[str] = set()
+    for col in columns:
+        final_columns.add(col)
+    for col in calc_derived_columns:
+        final_columns.add(f"{col} (calc)")
+
+    return tables, final_columns

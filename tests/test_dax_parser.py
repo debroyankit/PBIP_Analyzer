@@ -44,13 +44,13 @@ def test_mixed_qualified_and_bare():
 
 def test_multiline_variable_expression():
     dax = """
-    VAR CurrentPrice = SUM('Fact Procurement'[Spend])
-    VAR StandardPrice = SUM(Dim_Material[StandardCost])
+    VAR CurrentPrice = SUM('Fact_Sales'[Spend])
+    VAR StandardPrice = SUM(Products[StandardCost])
     RETURN
     CurrentPrice - StandardPrice
     """
     refs = extract_references(dax)
-    assert refs.tables == {"Fact Procurement", "Dim_Material"}
+    assert refs.tables == {"Fact_Sales", "Products"}
 
 
 def test_empty_expression():

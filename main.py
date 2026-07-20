@@ -2,15 +2,15 @@
 
 Usage as a CLI:
 
-    python main.py "C:/Projects/Procurement.pbip"
-    python main.py "C:/Projects/Procurement.pbip" --output ./output
-    python main.py "C:/Projects/Procurement.pbip" --table "Fact Procurement"
-    python main.py "C:/Projects/Procurement.pbip" --graph
+    python main.py "C:/Projects/Sales.pbip"
+    python main.py "C:/Projects/Sales.pbip" --output ./output
+    python main.py "C:/Projects/Sales.pbip" --table "Fact_Sales"
+    python main.py "C:/Projects/Sales.pbip" --graph
 
 Usage as a library:
 
     from main import analyze_pbip
-    graph = analyze_pbip("C:/Projects/Procurement.pbip")
+    graph = analyze_pbip("C:/Projects/Sales.pbip")
 """
 
 from __future__ import annotations
