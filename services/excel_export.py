@@ -275,6 +275,7 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
         "Home Table",
         "# Visuals Using It",
         "# Measures Depending On It",
+        "# Calc Columns Depending On It",
         "Used In Relationships (Y/N)",
         "Status",
         "Reason",
@@ -282,7 +283,7 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
     ws.append(headers)
     _style_header(ws, len(headers))
 
-    WRAP = {8}  # Wrap the Reason column
+    WRAP = {9}  # Wrap the Reason column
 
     # --- Pre-compute lookup structures ---
     unused = find_unused_entities(graph)
@@ -338,7 +339,7 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
         for col in lineage_col_names:
             col_to_measures.setdefault(col, set()).add(measure_name)
 
-    # For each column: count calculated columns that reference it
+    # Reverse map: base column -> set of calculated columns that reference it
     col_to_calc_cols: dict[str, set[str]] = {}
     for calc_key, calc_col in graph.calculated_columns.items():
         for ref_col in calc_col.referenced_columns:
@@ -353,6 +354,8 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
         return False
 
     # --- Collect all rows ---
+    # Row tuple: (obj_type, name, home_table, n_visuals, n_measures,
+    #              n_calc_cols, in_rel, status, reason)
     rows: list[tuple] = []
 
     # --- Table rows ---
@@ -389,7 +392,7 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
             reason = ", ".join(parts) if parts else "Referenced in model"
 
         rows.append((
-            "Table", table_name, "", n_visuals, n_measures, in_rel, status, reason,
+            "Table", table_name, "", n_visuals, n_measures, 0, in_rel, status, reason,
         ))
 
     # --- Measure rows ---
@@ -416,7 +419,7 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
             reason = ", ".join(parts) if parts else "Referenced in model"
 
         rows.append((
-            "Measure", measure_name, measure.table, n_visuals, n_used_by, "N", status, reason,
+            "Measure", measure_name, measure.table, n_visuals, n_used_by, 0, "N", status, reason,
         ))
 
     # --- Column rows ---
@@ -440,22 +443,19 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
             n_measures = len(dep_measures)
 
             # Count calculated columns that reference this column
-            n_calc_cols = len(col_to_calc_cols.get(qualified, set()))
+            dep_calc_cols = col_to_calc_cols.get(qualified, set())
+            n_calc_cols = len(dep_calc_cols)
 
             in_rel = "Y" if qualified in rel_columns else "N"
-            is_unused = col_name in unused_cols_for_table
 
             # Status classification
             if _is_system(table_name):
                 status = "System Table (auto-generated)"
                 reason = "Column on auto-generated date/time table"
-            elif is_unused:
-                status = "No References Found"
-                reason = "No direct or transitive references found"
             elif n_visuals == 0 and n_measures == 0 and n_calc_cols == 0 and in_rel == "Y":
                 status = "Used via Relationship Only"
                 reason = "Only referenced as a relationship join key"
-            else:
+            elif n_visuals > 0 or n_measures > 0 or n_calc_cols > 0:
                 status = "Active Column"
                 parts = []
                 if n_visuals:
@@ -464,16 +464,28 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
                     parts.append(f"{n_measures} measure{'s' if n_measures != 1 else ''}")
                 if n_calc_cols:
                     parts.append(f"{n_calc_cols} calculated column{'s' if n_calc_cols != 1 else ''}")
-                reason = ", ".join(parts) if parts else "Referenced in model"
+                reason = ", ".join(parts)
+            elif col_name in unused_cols_for_table and in_rel == "N":
+                status = "No References Found"
+                reason = "No direct or transitive references found"
+            else:
+                # Column not unused per find_unused_entities (e.g. relationship)
+                # but also not directly in visuals/measures — relationship key
+                if in_rel == "Y":
+                    status = "Used via Relationship Only"
+                    reason = "Only referenced as a relationship join key"
+                else:
+                    status = "No References Found"
+                    reason = "No direct or transitive references found"
 
             obj_type = "Calculated Column" if qualified in graph.calculated_columns else "Column"
             rows.append((
-                obj_type, qualified, table_name, n_visuals, n_measures, in_rel, status, reason,
+                obj_type, qualified, table_name, n_visuals, n_measures, n_calc_cols, in_rel, status, reason,
             ))
 
     # --- Sort: Status priority, then Object Type, then Object Name ---
     rows.sort(key=lambda r: (
-        _STATUS_ORDER.get(r[6], 99),
+        _STATUS_ORDER.get(r[7], 99),
         _TYPE_ORDER.get(r[0], 99),
         r[1],
     ))
@@ -484,7 +496,7 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
         _write_row(ws, row_idx, list(row_data), wrap_cols=WRAP)
 
         # Apply pale highlight to "No References Found" rows
-        if row_data[6] == "No References Found":
+        if row_data[7] == "No References Found":
             for col in range(1, len(headers) + 1):
                 ws.cell(row=row_idx, column=col).fill = _NO_REF_FILL
 

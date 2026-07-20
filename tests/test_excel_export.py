@@ -510,3 +510,171 @@ class TestVisualIdentityCollisions:
         assert "page1::v2" in measure.visuals
 
 
+class TestCalcColumnDependencyInImpactAnalysis:
+    """Verify that a base column referenced by an active calculated column
+    is not marked as 'No References Found' in the Impact Analysis sheet."""
+
+    def _build_calc_col_dependency_graph(self) -> DependencyGraph:
+        """Build a graph where:
+        - FactTable[PaymentTerms] is a plain base column (not on any visual)
+        - DimTable[TermDescription] is a calculated column = RELATED(FactTable[PaymentTerms])
+        - DimTable[TermDescription] IS used directly on a visual
+
+        So FactTable[PaymentTerms] must be 'Active Column' because deleting it
+        would break the calculated column.
+        """
+        model = RawSemanticModel()
+        model.tables["FactTable"] = RawTable(
+            name="FactTable",
+            columns={
+                "Amount": RawColumn(name="Amount"),
+                "PaymentTerms": RawColumn(name="PaymentTerms"),
+            },
+            measures=[
+                RawMeasure(name="Total Amount", table="FactTable", dax="SUM(FactTable[Amount])"),
+            ],
+        )
+        model.tables["DimTable"] = RawTable(
+            name="DimTable",
+            columns={
+                "DimKey": RawColumn(name="DimKey"),
+                "TermDescription": RawColumn(
+                    name="TermDescription",
+                    expression="RELATED(FactTable[PaymentTerms])",
+                ),
+            },
+        )
+        model.relationships.append(
+            RawRelationship(
+                from_table="FactTable", from_column="PaymentTerms",
+                to_table="DimTable", to_column="DimKey",
+            )
+        )
+
+        report = RawReport()
+        # Visual 1: uses the measure
+        report.visuals["v1"] = RawVisual(
+            id="v1", title="Amount Card", type="card",
+            raw_field_refs={("FactTable", "Total Amount")},
+        )
+        # Visual 2: uses the calculated column directly
+        report.visuals["v2"] = RawVisual(
+            id="v2", title="Terms Table", type="tableEx",
+            raw_field_refs={("DimTable", "TermDescription")},
+        )
+        report.pages.append(RawPage(name="Page1", visual_ids=["v1", "v2"]))
+
+        return DependencyEngine(model, report).build()
+
+    def test_base_column_not_marked_unused_when_calc_col_depends_on_it(self):
+        """FactTable[PaymentTerms] is referenced by DimTable[TermDescription]
+        (a calc col used in a visual), so it must NOT be 'No References Found'."""
+        from services.excel_export import write_excel_report
+        from openpyxl import load_workbook
+        import io
+
+        graph = self._build_calc_col_dependency_graph()
+        raw_bytes = write_excel_report(graph, output_path=None, exclude_system=False)
+
+        wb = load_workbook(io.BytesIO(raw_bytes))
+        ws = wb["Impact Analysis"]
+
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        type_idx = headers.index("Object Type") + 1
+        name_idx = headers.index("Object Name") + 1
+        calc_col_idx = headers.index("# Calc Columns Depending On It") + 1
+        status_idx = headers.index("Status") + 1
+
+        # Find the row for FactTable[PaymentTerms]
+        target_row = None
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=name_idx).value == "FactTable[PaymentTerms]":
+                target_row = row
+                break
+
+        assert target_row is not None, "FactTable[PaymentTerms] not found in Impact Analysis"
+
+        status = ws.cell(row=target_row, column=status_idx).value
+        n_calc = ws.cell(row=target_row, column=calc_col_idx).value
+
+        assert status != "No References Found", (
+            f"FactTable[PaymentTerms] should not be 'No References Found' "
+            f"because a calculated column depends on it"
+        )
+        assert status == "Active Column", f"Expected 'Active Column', got '{status}'"
+        assert int(n_calc) == 1, f"Expected 1 calc column depending on it, got {n_calc}"
+
+    def test_calc_column_labelled_correctly(self):
+        """DimTable[TermDescription] should have Object Type = 'Calculated Column'."""
+        from services.excel_export import write_excel_report
+        from openpyxl import load_workbook
+        import io
+
+        graph = self._build_calc_col_dependency_graph()
+        raw_bytes = write_excel_report(graph, output_path=None, exclude_system=False)
+
+        wb = load_workbook(io.BytesIO(raw_bytes))
+        ws = wb["Impact Analysis"]
+
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        type_idx = headers.index("Object Type") + 1
+        name_idx = headers.index("Object Name") + 1
+
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=name_idx).value == "DimTable[TermDescription]":
+                obj_type = ws.cell(row=row, column=type_idx).value
+                assert obj_type == "Calculated Column", (
+                    f"Expected 'Calculated Column', got '{obj_type}'"
+                )
+                return
+
+        assert False, "DimTable[TermDescription] not found in Impact Analysis"
+
+    def test_new_header_present(self):
+        """The '# Calc Columns Depending On It' header must exist in Impact Analysis."""
+        from services.excel_export import write_excel_report
+        from openpyxl import load_workbook
+        import io
+
+        graph = self._build_calc_col_dependency_graph()
+        raw_bytes = write_excel_report(graph, output_path=None, exclude_system=False)
+
+        wb = load_workbook(io.BytesIO(raw_bytes))
+        ws = wb["Impact Analysis"]
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        assert "# Calc Columns Depending On It" in headers
+
+    def test_removable_items_sorted_first(self):
+        """'No References Found' rows must appear before 'Active' rows."""
+        from services.excel_export import write_excel_report
+        from openpyxl import load_workbook
+        import io
+
+        graph = self._build_calc_col_dependency_graph()
+        raw_bytes = write_excel_report(graph, output_path=None, exclude_system=False)
+
+        wb = load_workbook(io.BytesIO(raw_bytes))
+        ws = wb["Impact Analysis"]
+
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        status_idx = headers.index("Status") + 1
+
+        statuses = []
+        for row in range(2, ws.max_row + 1):
+            val = ws.cell(row=row, column=status_idx).value
+            if val:
+                statuses.append(val)
+
+        # All "No References Found" must come before any "Active *"
+        last_no_ref = -1
+        first_active = len(statuses)
+        for i, s in enumerate(statuses):
+            if s == "No References Found":
+                last_no_ref = i
+            if s.startswith("Active") and i < first_active:
+                first_active = i
+
+        if last_no_ref >= 0 and first_active < len(statuses):
+            assert last_no_ref < first_active, (
+                "Removable items ('No References Found') must be sorted before active items"
+            )
