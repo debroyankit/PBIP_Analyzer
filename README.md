@@ -16,35 +16,37 @@ git-friendly, folder-based format Power BI Desktop can save to via
 
 ```bash
 pip install -r requirements.txt   # only needed for running the test suite
-python main.py "C:/Projects/Procurement.pbip"
+python main.py "C:/Projects/Procurement"
 ```
 
 This will:
 
-1. Locate the project's Report and Semantic Model folders automatically.
+1. Locate the project's Report and Semantic Model folders automatically (accepts either a direct path to a `.pbip` file, or the parent folder containing one).
 2. Parse the semantic model (tables, columns, calculated columns, measures,
    relationships).
 3. Parse the report (pages, visuals, fields/measures used).
 4. Build the full dependency graph, including relationship- and
    calculated-column-derived table links, and measure-to-measure lineage.
 5. Print a per-table report to the console, plus an unused-entities summary.
-6. Write `./output/dependency_report.json` (and a richer
-   `dependency_report_full.json`, see [Output](#output) below).
+6. Automatically save a formatted Excel workbook with a unique timestamp (e.g. `dependency_report_20260719_164728.xlsx`) to your `Downloads` folder. (It also writes a copy to `./output/dependency_report.xlsx`).
 
 Useful flags:
 
 ```bash
-# Custom output directory
-python main.py "C:/Projects/Procurement.pbip" --output ./reports
+# Custom output directory (in addition to the Downloads copy)
+python main.py "C:/Projects/Procurement" --output ./reports
 
 # Only print one table's dependency report to the console
-python main.py "C:/Projects/Procurement.pbip" --table "Fact Procurement"
+python main.py "C:/Projects/Procurement" --table "Fact Procurement"
 
 # Also emit a Graphviz DOT file (dependency_graph.dot) for a visual diagram
-python main.py "C:/Projects/Procurement.pbip" --graph
+python main.py "C:/Projects/Procurement" --graph
+
+# Do not write the Excel workbook
+python main.py "C:/Projects/Procurement" --no-excel
 
 # Debug logging
-python main.py "C:/Projects/Procurement.pbip" --verbose
+python main.py "C:/Projects/Procurement" --verbose
 ```
 
 Render the graph with Graphviz once installed:
@@ -263,70 +265,15 @@ Columns:
 ==================================================
 ```
 
-### `dependency_report.json` (primary, table-keyed)
+### Excel workbook (`dependency_report_[timestamp].xlsx`)
 
-Matches the required shape, with one addition (`related_tables`, from
-relationships + calculated columns):
+The workbook is styled in deep navy and contains exactly three sheets:
 
-```json
-{
-  "Fact Procurement": {
-    "columns": ["Currency", "POID", "Spend", "Vendor"],
-    "measures": ["Avg Spend", "Purchase Price Variance", "Total Spend"],
-    "visuals": ["KPI Card", "Spend Trend", "Supplier Matrix"],
-    "pages": ["Executive Dashboard", "Supplier Analysis"],
-    "related_tables": ["Dim_Material", "Dim_Vendor"]
-  }
-}
-```
+1. **Table Dependency Summary**: One row per table showing aggregated columns, measures, visuals, report pages, and the total counts for measures and visuals.
+2. **Detailed Dependency Mapping**: One row per unique (Table, Column, Measure, Visual, Type, Page) relationship. This sheet is filterable and allows fast searching.
+3. **DAX Dependency Lineage**: Displays measure dependencies including direct tables, direct measures referenced, and final transitively dependent tables.
 
-### `dependency_report_full.json` (extended, for deeper analysis / an API)
-
-Adds full detail for every entity type -- each measure's DAX text,
-referenced tables/columns and measure-to-measure lineage; every visual's
-type/page; the raw model **relationships**; every **calculated column**
-that reaches into another table; and the **unused_entities** hygiene
-summary:
-
-```json
-{
-  "tables": { "...": "same shape as above" },
-  "measures": {
-    "Purchase Price Variance": {
-      "table": "Fact Procurement",
-      "dax": "VAR CurrentPrice = SUM('Fact Procurement'[Spend])\n...",
-      "referenced_tables": ["Dim_Material", "Fact Procurement"],
-      "referenced_columns": ["Dim_Material[StandardCost]", "Fact Procurement[Spend]"],
-      "visuals": ["Supplier Matrix"],
-      "pages": ["Supplier Analysis"],
-      "depends_on_measures": [],
-      "used_by_measures": []
-    }
-  },
-  "visuals": { "...": "type/page/tables/columns/measures per visual" },
-  "pages": { "...": "visuals/tables per page" },
-  "relationships": [
-    {
-      "from_table": "Fact Procurement",
-      "from_column": "Vendor",
-      "to_table": "Dim_Vendor",
-      "to_column": "Vendor"
-    }
-  ],
-  "calculated_columns": {
-    "Invoice Line Item[Savings]": {
-      "table": "Invoice Line Item",
-      "expression": "RELATED(Invoice[Discount Percent])*[Invoice Amount]",
-      "referenced_tables": ["Invoice"]
-    }
-  },
-  "unused_entities": {
-    "unused_tables": ["Dim_Vendor"],
-    "unused_measures": ["Vendor Count"],
-    "unused_columns": { "Fact Procurement": ["POID"] }
-  }
-}
-```
+Every run automatically downloads a new copy of the Excel workbook with a unique timestamp in the filename directly to your user `Downloads` folder, avoiding locking issues if you have a report open in Excel.
 
 A sample project and its generated output are included under
 [`sample_project/`](./sample_project) and [`sample_output/`](./sample_output)
@@ -343,7 +290,7 @@ errors exit `2` with a full traceback logged):
 
 | Situation                              | Exception raised               |
 |-----------------------------------------|--------------------------------|
-| Path isn't a `.pbip` file / doesn't exist / is a `.pbix` | `InvalidPBIPFileError` |
+| Path isn't a `.pbip` file or folder containing one / doesn't exist | `InvalidPBIPFileError` |
 | `.pbip` JSON is corrupt                 | `InvalidPBIPFileError` (via `CorruptFileError`) |
 | No `*.Report` folder found              | `ReportNotFoundError`          |
 | No `*.SemanticModel` folder found       | `SemanticModelNotFoundError`   |
@@ -369,13 +316,11 @@ The architecture is intentionally split so each extension point is isolated:
   else needs to change since both return the same `Raw*` structures.
 - **Richer DAX analysis** (e.g. distinguishing `RELATED` from a plain column
   reference) → extend `dax_parser.extract_references`.
-- **New output format** (e.g. CSV, Markdown) → add a `build_*` + writer
-  function in `main.py` alongside `build_table_summary` /
-  `write_json_reports`; the `DependencyGraph` already has everything needed.
+- **New output format** (e.g. Markdown, CSV) → add a builder + writer
+  function in `main.py` or `excel_export.py`; the `DependencyGraph` already has everything needed.
 - **A FastAPI backend** → import `analyze_pbip` (file-based) or
   `DependencyEngine` (in-memory, if you already have parsed data) directly;
-  neither has any CLI or filesystem-output coupling baked in beyond writing
-  the JSON/DOT files, which is trivially optional.
+  neither has any CLI coupling baked in.
 
 ## Known limitations
 
