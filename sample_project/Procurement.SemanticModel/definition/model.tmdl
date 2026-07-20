@@ -1,4 +1,0 @@
-model Model
-	culture: en-US
-
-annotation PBI_QueryOrder = ["Fact Procurement","Dim_Vendor","Dim_Material"]

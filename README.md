@@ -275,10 +275,6 @@ The workbook is styled in deep navy and contains exactly three sheets:
 
 Every run automatically downloads a new copy of the Excel workbook with a unique timestamp in the filename directly to your user `Downloads` folder, avoiding locking issues if you have a report open in Excel.
 
-A sample project and its generated output are included under
-[`sample_project/`](./sample_project) and [`sample_output/`](./sample_output)
-(including a rendered `dependency_graph.dot`).
-
 ---
 
 ## Error handling

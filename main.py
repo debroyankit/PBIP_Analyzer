@@ -54,15 +54,15 @@ def analyze_pbip(
     Python code, and reusable as-is inside a future FastAPI endpoint).
 
     Args:
-        pbip_path: Path to the '.pbip' project file.
-        output_dir: Directory to write 'dependency_report.json' and the
-            extended 'dependency_report_full.json' into. Defaults to
-            './output' relative to the current working directory.
+        pbip_path: Path to the '.pbip' project file or folder containing one.
+        output_dir: Directory to write 'dependency_report.xlsx' into.
+            Defaults to './output' relative to the current working directory.
+            A timestamped copy is also saved to ~/Downloads automatically.
         verbose: Enable DEBUG-level logging.
         table_filter: If given, the console report only prints this one
             table (case-insensitive match) instead of every table. Has no
-            effect on what gets written to the JSON files -- those always
-            contain the full project.
+            effect on the Excel output -- that always contains the full
+            project.
         write_graph: If True, also write 'dependency_graph.dot' (Graphviz)
             to the output directory.
         write_excel: If True, write 'dependency_report.xlsx' to the output
@@ -342,12 +342,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         prog="pbip_analyzer",
         description="Analyze a Power BI PBIP project and report table/measure/visual/page dependencies.",
     )
-    parser.add_argument("pbip_path", help="Path to the .pbip project file.")
+    parser.add_argument("pbip_path", help="Path to the .pbip project file or folder containing one.")
     parser.add_argument(
         "--output",
         dest="output_dir",
         default=None,
-        help="Directory to write dependency_report.json into (default: ./output).",
+        help="Directory to write dependency_report.xlsx into (default: ./output).",
     )
     parser.add_argument(
         "--table",
