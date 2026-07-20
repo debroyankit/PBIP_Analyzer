@@ -86,7 +86,7 @@ def test_visual_expands_tables_through_measure():
 def test_page_aggregates_visual_tables():
     graph = _build_graph()
     page = graph.pages["Home"]
-    assert "Sales Card" in page.visuals
+    assert "v1" in page.visuals
     assert page.tables == {"Sales"}
 
 
@@ -120,9 +120,8 @@ def test_calculated_column_creates_related_table_link():
 def test_find_unused_entities_reports_unqueried_table_and_measure():
     graph = _build_graph()
     unused = find_unused_entities(graph)
-    # "Budget" and "Region" tables have no visual using them directly.
+    # "Budget" table has no visual using them directly or transitively.
     assert "Budget" in unused["unused_tables"]
-    assert "Region" in unused["unused_tables"]
     # "Variance" and "Total Sales Rounded" measures are never used by a visual.
     assert "Variance" in unused["unused_measures"]
     assert "Total Sales Rounded" in unused["unused_measures"]

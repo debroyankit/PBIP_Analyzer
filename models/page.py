@@ -12,7 +12,7 @@ class Page:
     Attributes:
         name: Display name of the page (falls back to internal id if no
             display name is set).
-        visuals: Titles/ids of the visuals placed on this page.
+        visuals: Unique visual IDs of the visuals placed on this page.
         tables: Union of all tables referenced by visuals on this page.
     """
 

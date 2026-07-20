@@ -51,6 +51,7 @@ class CalculatedColumn:
     expression: str
     referenced_tables: set[str] = field(default_factory=set)
     referenced_columns: set[str] = field(default_factory=set)
+    referenced_measures: set[str] = field(default_factory=set)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -188,6 +189,9 @@ class DependencyEngine:
                 dax_refs = extract_references(raw_column.expression)
                 referenced_tables = {t for t in dax_refs.tables if t != raw_table.name}
 
+                all_measure_names = set(graph.measures.keys())
+                referenced_measures = {m for m in dax_refs.bare_names if m in all_measure_names}
+
                 key = f"{raw_table.name}[{raw_column.name}]"
                 graph.calculated_columns[key] = CalculatedColumn(
                     table=raw_table.name,
@@ -195,6 +199,7 @@ class DependencyEngine:
                     expression=raw_column.expression,
                     referenced_tables=referenced_tables,
                     referenced_columns=set(dax_refs.qualified_columns),
+                    referenced_measures=referenced_measures,
                 )
 
                 if not referenced_tables:
@@ -269,7 +274,7 @@ class DependencyEngine:
                         visual.columns.add(f"{table_name}[{field_name}]")
 
                 graph.visuals[visual.id] = visual
-                page.visuals.add(visual.title)
+                page.visuals.add(visual.id)
 
             graph.pages[page.name] = page
 
@@ -301,13 +306,13 @@ class DependencyEngine:
                 if measure is None:
                     continue
                 visual.tables |= measure.referenced_tables
-                measure.visuals.add(visual.title)
+                measure.visuals.add(visual.id)
                 measure.pages.add(visual.page)
 
             for table_name in visual.tables:
                 table = graph.tables.get(table_name)
                 if table is not None:
-                    table.visuals.add(visual.title)
+                    table.visuals.add(visual.id)
                     table.pages.add(visual.page)
 
     def _link_pages(self, graph: DependencyGraph) -> None:
@@ -333,70 +338,83 @@ def find_unused_entities(graph: DependencyGraph) -> dict[str, object]:
             - "unused_columns": {table_name: [column_names]} for tables that
               have at least one column never referenced.
     """
-    # 1. Trace used measures transitively
     used_measures: set[str] = set()
-    queue_measures: list[str] = []
+    used_columns: set[str] = set()
+    queue: list[tuple[str, str]] = []  # (node_type, name)
+
+    # 1. Seed queue with visual dependencies
     for visual in graph.visuals.values():
         for m in visual.measures:
             if m in graph.measures and m not in used_measures:
                 used_measures.add(m)
-                queue_measures.append(m)
+                queue.append(("measure", m))
+        for col in visual.columns:
+            if col not in used_columns:
+                used_columns.add(col)
+                queue.append(("column", col))
 
-    while queue_measures:
-        current_m = queue_measures.pop(0)
-        measure_obj = graph.measures[current_m]
-        for dep in measure_obj.depends_on_measures:
-            if dep in graph.measures and dep not in used_measures:
-                used_measures.add(dep)
-                queue_measures.append(dep)
+    # 2. Seed queue with relationship dependencies
+    for rel in graph.relationships:
+        for col in (f"{rel.from_table}[{rel.from_column}]", f"{rel.to_table}[{rel.to_column}]"):
+            if col not in used_columns:
+                used_columns.add(col)
+                queue.append(("column", col))
 
-    unused_tables = sorted(name for name, table in graph.tables.items() if not table.visuals)
+    # 3. Unified BFS
+    while queue:
+        node_type, name = queue.pop(0)
+
+        if node_type == "measure":
+            measure_obj = graph.measures.get(name)
+            if measure_obj:
+                for dep in measure_obj.depends_on_measures:
+                    if dep in graph.measures and dep not in used_measures:
+                        used_measures.add(dep)
+                        queue.append(("measure", dep))
+                for ref_col in measure_obj.referenced_columns:
+                    if ref_col not in used_columns:
+                        used_columns.add(ref_col)
+                        queue.append(("column", ref_col))
+
+        elif node_type == "column":
+            calc_col = graph.calculated_columns.get(name)
+            if calc_col:
+                for ref_col in calc_col.referenced_columns:
+                    if ref_col not in used_columns:
+                        used_columns.add(ref_col)
+                        queue.append(("column", ref_col))
+                for ref_measure in calc_col.referenced_measures:
+                    if ref_measure in graph.measures and ref_measure not in used_measures:
+                        used_measures.add(ref_measure)
+                        queue.append(("measure", ref_measure))
+
     unused_measures = sorted(name for name in graph.measures if name not in used_measures)
 
-    # 2. Trace used columns
-    used_columns: set[str] = set()
-
-    # Columns directly referenced in visuals
-    for visual in graph.visuals.values():
-        for col in visual.columns:
-            used_columns.add(col)
-
-    # Columns referenced by used measures
-    for m in used_measures:
-        measure_obj = graph.measures[m]
-        for ref_col in measure_obj.referenced_columns:
-            used_columns.add(ref_col)
-
-    # Columns used in relationships
-    for rel in graph.relationships:
-        used_columns.add(f"{rel.from_table}[{rel.from_column}]")
-        used_columns.add(f"{rel.to_table}[{rel.to_column}]")
-
-    # Columns referenced by used calculated columns (trace recursively)
-    queue_columns = list(used_columns)
-    visited_calc_cols: set[str] = set()
-
-    while queue_columns:
-        current_col = queue_columns.pop(0)
-        if current_col in graph.calculated_columns and current_col not in visited_calc_cols:
-            visited_calc_cols.add(current_col)
-            calc_col = graph.calculated_columns[current_col]
-            for ref_col in calc_col.referenced_columns:
-                if ref_col not in used_columns:
-                    used_columns.add(ref_col)
-                    queue_columns.append(ref_col)
-
     unused_columns: dict[str, list[str]] = {}
+    used_tables: set[str] = set()
+
     for table_name, table in graph.tables.items():
+        if table.visuals:
+            used_tables.add(table_name)
+
         table_prefix = f"{table_name}["
         table_used = set()
         for col in used_columns:
             if col.startswith(table_prefix) and col.endswith("]"):
                 col_name = col[len(table_prefix):-1]
                 table_used.add(col_name)
+                used_tables.add(table_name)
+
         unused = sorted(table.columns - table_used)
         if unused:
             unused_columns[table_name] = unused
+
+    for m_name in used_measures:
+        m = graph.measures.get(m_name)
+        if m:
+            used_tables.add(m.table)
+
+    unused_tables = sorted(name for name in graph.tables if name not in used_tables)
 
     return {
         "unused_tables": unused_tables,
@@ -415,54 +433,53 @@ def trace_measure_lineage(
     ``columns`` uses "Table[Column]" format; entries reached only via a
     calculated column's RELATED()/RELATEDTABLE() formula are suffixed " (calc)".
     """
-    # 1. Walk depends_on_measures transitively (BFS)
-    all_measures_in_chain: list[Measure] = [measure]
-    visited_measures: set[str] = {measure.name}
-    queue: list[str] = list(measure.depends_on_measures)
-
-    while queue:
-        dep_name = queue.pop(0)
-        if dep_name in visited_measures:
-            continue
-        visited_measures.add(dep_name)
-        dep_measure = graph.measures.get(dep_name)
-        if dep_measure is not None:
-            all_measures_in_chain.append(dep_measure)
-            for sub_dep in dep_measure.depends_on_measures:
-                if sub_dep not in visited_measures:
-                    queue.append(sub_dep)
-
-    # 2. Union referenced_tables and referenced_columns from every measure
     tables: set[str] = set()
     columns: set[str] = set()
-    for m in all_measures_in_chain:
-        tables |= m.referenced_tables
-        columns |= m.referenced_columns
-
-    # 3. Resolve calculated-column references to their base columns
-    #    Reuses the exact BFS pattern from find_unused_entities.
-    col_queue = list(columns)
-    visited_calc_cols: set[str] = set()
     calc_derived_columns: set[str] = set()
 
-    while col_queue:
-        current_col = col_queue.pop(0)
-        if current_col in graph.calculated_columns and current_col not in visited_calc_cols:
-            visited_calc_cols.add(current_col)
-            calc_col = graph.calculated_columns[current_col]
-            # Add the calculated column's own referenced tables
-            tables |= calc_col.referenced_tables
-            for ref_col in calc_col.referenced_columns:
-                if ref_col not in columns:
-                    # Mark as calc-derived
-                    calc_derived_columns.add(ref_col)
-                    col_queue.append(ref_col)
+    visited_measures: set[str] = {measure.name}
+    visited_columns: set[str] = set()
 
-    # 4. Build final columns set with (calc) suffix for calc-derived entries
+    queue: list[tuple[str, str]] = [("measure", measure.name)]
+
+    while queue:
+        node_type, name = queue.pop(0)
+
+        if node_type == "measure":
+            m_obj = graph.measures.get(name)
+            if m_obj:
+                tables |= m_obj.referenced_tables
+                for sub_dep in m_obj.depends_on_measures:
+                    if sub_dep not in visited_measures:
+                        visited_measures.add(sub_dep)
+                        queue.append(("measure", sub_dep))
+                for ref_col in m_obj.referenced_columns:
+                    if ref_col not in visited_columns:
+                        visited_columns.add(ref_col)
+                        columns.add(ref_col)
+                        queue.append(("column", ref_col))
+
+        elif node_type == "column":
+            calc_col = graph.calculated_columns.get(name)
+            if calc_col:
+                tables |= calc_col.referenced_tables
+                for ref_col in calc_col.referenced_columns:
+                    if ref_col not in visited_columns:
+                        visited_columns.add(ref_col)
+                        calc_derived_columns.add(ref_col)
+                        queue.append(("column", ref_col))
+                for ref_measure in calc_col.referenced_measures:
+                    if ref_measure not in visited_measures:
+                        visited_measures.add(ref_measure)
+                        queue.append(("measure", ref_measure))
+
     final_columns: set[str] = set()
     for col in columns:
         final_columns.add(col)
     for col in calc_derived_columns:
-        final_columns.add(f"{col} (calc)")
+        if col not in columns:
+            final_columns.add(f"{col} (calc)")
+        else:
+            final_columns.add(col)
 
     return tables, final_columns

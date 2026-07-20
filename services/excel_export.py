@@ -176,64 +176,73 @@ def _build_sheet1(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
         "Direct Measures",
         "Dependency Tables",
         "Dependency Columns",
-        "Full DAX of Direct Measures",
     ]
     ws.append(headers)
     _style_header(ws, len(headers))
 
-    # Wrap-text columns: Direct Measures(4), Dep Tables(5), Dep Columns(6), DAX(7)
-    WRAP = {4, 5, 6, 7}
+    # Wrap-text columns: Direct Measures(4), Dep Tables(5), Dep Columns(6)
+    WRAP = {4, 5, 6}
 
-    for visual in sorted(graph.visuals.values(), key=lambda v: (v.page, v.title)):
-        if exclude_system:
-            # Skip visuals that only reference system tables
-            non_system = {t for t in visual.tables if not _is_system(t)}
-            if not non_system and visual.tables:
-                continue
+    # Group visuals by page
+    page_to_visuals: dict[str, list[Visual]] = {}
+    for visual in graph.visuals.values():
+        page_to_visuals.setdefault(visual.page, []).append(visual)
 
-        # Compute dependency tables and columns via trace_measure_lineage
-        dep_tables: set[str] = set()
-        dep_columns: set[str] = set()
+    for page_name in sorted(graph.pages.keys()):
+        visuals_list = page_to_visuals.get(page_name, [])
 
-        for measure_name in visual.measures:
-            measure = graph.measures.get(measure_name)
-            if measure is not None:
-                m_tables, m_columns = trace_measure_lineage(measure, graph)
-                dep_tables |= m_tables
-                dep_columns |= m_columns
+        if not visuals_list:
+            # Write a row for empty page
+            _write_row(
+                ws,
+                ws.max_row + 1,
+                [
+                    page_name,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+                wrap_cols=WRAP,
+            )
+            continue
 
-        # Add tables/columns used directly by the visual (not through a measure)
-        for col_ref in visual.columns:
-            dep_columns.add(col_ref)
-            table_part = col_ref.partition("[")[0]
-            dep_tables.add(table_part)
+        for visual in sorted(visuals_list, key=lambda v: v.title):
+            # Compute dependency tables and columns via trace_measure_lineage
+            dep_tables: set[str] = set()
+            dep_columns: set[str] = set()
 
-        if exclude_system:
-            dep_tables = {t for t in dep_tables if not _is_system(t)}
-            dep_columns = {c for c in dep_columns if not _is_system(c.partition("[")[0])}
+            for measure_name in visual.measures:
+                measure = graph.measures.get(measure_name)
+                if measure is not None:
+                    m_tables, m_columns = trace_measure_lineage(measure, graph)
+                    dep_tables |= m_tables
+                    dep_columns |= m_columns
 
-        # Build DAX block: label each formula with its measure name
-        dax_parts: list[str] = []
-        for measure_name in sorted(visual.measures):
-            measure = graph.measures.get(measure_name)
-            if measure is not None and measure.dax:
-                dax_parts.append(f"{measure_name}:\n{measure.dax}")
-        dax_text = "\n\n".join(dax_parts)
+            # Add tables/columns used directly by the visual (not through a measure)
+            for col_ref in visual.columns:
+                dep_columns.add(col_ref)
+                table_part = col_ref.partition("[")[0]
+                dep_tables.add(table_part)
 
-        _write_row(
-            ws,
-            ws.max_row + 1,
-            [
-                visual.page,
-                visual.title,
-                visual.type,
-                _join(visual.measures) or None,
-                _join(dep_tables) or None,
-                _join(dep_columns) or None,
-                dax_text or None,
-            ],
-            wrap_cols=WRAP,
-        )
+            if exclude_system:
+                dep_tables = {t for t in dep_tables if not _is_system(t)}
+                dep_columns = {c for c in dep_columns if not _is_system(c.partition("[")[0])}
+
+            _write_row(
+                ws,
+                ws.max_row + 1,
+                [
+                    page_name,
+                    visual.title,
+                    visual.type,
+                    _join(visual.measures) or None,
+                    _join(dep_tables) or None,
+                    _join(dep_columns) or None,
+                ],
+                wrap_cols=WRAP,
+            )
 
     _auto_width(ws)
 
@@ -254,7 +263,7 @@ _STATUS_ORDER = {
 }
 
 # Object type sort priority
-_TYPE_ORDER = {"Table": 0, "Measure": 1, "Column": 2}
+_TYPE_ORDER = {"Table": 0, "Measure": 1, "Calculated Column": 2, "Column": 3}
 
 
 def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) -> None:
@@ -300,7 +309,7 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
     col_to_visual_direct: dict[str, set[str]] = {}
     for visual in graph.visuals.values():
         for col_ref in visual.columns:
-            col_to_visual_direct.setdefault(col_ref, set()).add(visual.title)
+            col_to_visual_direct.setdefault(col_ref, set()).add(visual.id)
 
     # Pre-compute measure lineage for all measures (for column visual/measure counts)
     measure_lineage_cache: dict[str, tuple[set[str], set[str]]] = {}
@@ -316,8 +325,8 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
         for c in lineage_cols:
             lineage_col_names.add(re.sub(r" \(calc\)$", "", c))
         for col in lineage_col_names:
-            for visual_title in measure.visuals:
-                col_to_visual_via_measure.setdefault(col, set()).add(visual_title)
+            for visual_id in measure.visuals:
+                col_to_visual_via_measure.setdefault(col, set()).add(visual_id)
 
     # For each column: count measures whose lineage includes it
     col_to_measures: dict[str, set[str]] = {}
@@ -328,6 +337,12 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
             lineage_col_names.add(re.sub(r" \(calc\)$", "", c))
         for col in lineage_col_names:
             col_to_measures.setdefault(col, set()).add(measure_name)
+
+    # For each column: count calculated columns that reference it
+    col_to_calc_cols: dict[str, set[str]] = {}
+    for calc_key, calc_col in graph.calculated_columns.items():
+        for ref_col in calc_col.referenced_columns:
+            col_to_calc_cols.setdefault(ref_col, set()).add(calc_key)
 
     # For tables: check if any column appears directly on a visual
     def _table_has_direct_visual_columns(table_name: str) -> bool:
@@ -424,38 +439,36 @@ def _build_sheet2(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
             dep_measures = col_to_measures.get(qualified, set())
             n_measures = len(dep_measures)
 
+            # Count calculated columns that reference this column
+            n_calc_cols = len(col_to_calc_cols.get(qualified, set()))
+
             in_rel = "Y" if qualified in rel_columns else "N"
+            is_unused = col_name in unused_cols_for_table
 
             # Status classification
             if _is_system(table_name):
                 status = "System Table (auto-generated)"
                 reason = "Column on auto-generated date/time table"
-            elif n_visuals == 0 and n_measures == 0 and in_rel == "Y":
-                status = "Used via Relationship Only"
-                reason = "Only referenced as a relationship join key"
-            elif col_name in unused_cols_for_table and in_rel == "N":
+            elif is_unused:
                 status = "No References Found"
                 reason = "No direct or transitive references found"
-            elif n_visuals > 0 or n_measures > 0:
+            elif n_visuals == 0 and n_measures == 0 and n_calc_cols == 0 and in_rel == "Y":
+                status = "Used via Relationship Only"
+                reason = "Only referenced as a relationship join key"
+            else:
                 status = "Active Column"
                 parts = []
                 if n_visuals:
                     parts.append(f"Used in {n_visuals} visual{'s' if n_visuals != 1 else ''}")
                 if n_measures:
                     parts.append(f"{n_measures} measure{'s' if n_measures != 1 else ''}")
-                reason = ", ".join(parts)
-            else:
-                # Column not unused per find_unused_entities (e.g. relationship)
-                # but also not directly in visuals/measures — relationship key
-                if in_rel == "Y":
-                    status = "Used via Relationship Only"
-                    reason = "Only referenced as a relationship join key"
-                else:
-                    status = "No References Found"
-                    reason = "No direct or transitive references found"
+                if n_calc_cols:
+                    parts.append(f"{n_calc_cols} calculated column{'s' if n_calc_cols != 1 else ''}")
+                reason = ", ".join(parts) if parts else "Referenced in model"
 
+            obj_type = "Calculated Column" if qualified in graph.calculated_columns else "Column"
             rows.append((
-                "Column", qualified, table_name, n_visuals, n_measures, in_rel, status, reason,
+                obj_type, qualified, table_name, n_visuals, n_measures, in_rel, status, reason,
             ))
 
     # --- Sort: Status priority, then Object Type, then Object Name ---
@@ -513,6 +526,8 @@ def _build_sheet3(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
                 if not _is_system(re.sub(r" \(calc\)$", "", c).partition("[")[0])
             }
 
+        visual_titles = {graph.visuals[vid].title for vid in measure.visuals if vid in graph.visuals}
+
         _write_row(
             ws,
             ws.max_row + 1,
@@ -521,7 +536,7 @@ def _build_sheet3(wb: Workbook, graph: DependencyGraph, exclude_system: bool) ->
                 _join(measure.depends_on_measures) or None,
                 _join(lineage_columns) or None,
                 _join(lineage_tables) or None,
-                _join(measure.visuals) or None,
+                _join(visual_titles) or None,
                 _join(measure.used_by_measures) or None,
                 measure.dax or None,
             ],

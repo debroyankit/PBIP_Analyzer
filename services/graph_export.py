@@ -63,7 +63,8 @@ def build_dot(graph: DependencyGraph, exclude_system: bool = False) -> str:
             continue
         for page_name in sorted(table.pages):
             page = graph.pages.get(page_name)
-            shared_visuals = sorted(table.visuals & page.visuals) if page else []
+            shared_visual_ids = table.visuals & page.visuals if page else set()
+            shared_visuals = sorted(graph.visuals[vid].title for vid in shared_visual_ids if vid in graph.visuals)
             label = _escape(", ".join(shared_visuals)) if shared_visuals else ""
             lines.append(
                 f'  "table::{_escape(table_name)}" -> "page::{_escape(page_name)}" [label="{label}"];'

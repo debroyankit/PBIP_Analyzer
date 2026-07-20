@@ -17,7 +17,7 @@ class Measure:
             the home table).
         referenced_columns: Fully qualified "Table[Column]" references found
             in the DAX expression.
-        visuals: Titles/ids of visuals that use this measure.
+        visuals: Unique visual IDs of visuals that use this measure.
         pages: Names of pages that contain a visual using this measure.
         depends_on_measures: Other measures this measure's DAX references
             via a bare "[Measure Name]" expression.

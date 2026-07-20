@@ -204,7 +204,7 @@ def print_console_report(
     for name, table in sorted(graph.tables.items()):
         if exclude_system and is_system_table(name):
             continue
-        _print_table_section(name, table, exclude_system, no_color, output_format)
+        _print_table_section(graph, name, table, exclude_system, no_color, output_format)
 
     # 4. Print unused entities
     _print_unused_entities_summary(graph, exclude_system, no_color, output_format)
@@ -228,10 +228,11 @@ def _print_single_table(
                 print(f"  - {suggestion}")
         return
 
-    _print_table_section(match, graph.tables[match], exclude_system, no_color, output_format)
+    _print_table_section(graph, match, graph.tables[match], exclude_system, no_color, output_format)
 
 
 def _print_table_section(
+    graph: DependencyGraph,
     name: str,
     table,
     exclude_system: bool = False,
@@ -243,12 +244,14 @@ def _print_table_section(
     if exclude_system:
         related_tables = [t for t in related_tables if not is_system_table(t)]
 
+    visual_titles = sorted(graph.visuals[vid].title for vid in table.visuals if vid in graph.visuals)
+
     if output_format == "markdown":
         print(f"### TABLE: {name}")
         print()
         _print_section_md("Columns", sorted(table.columns))
         _print_section_md("Measures", sorted(table.measures))
-        _print_section_md("Visuals", sorted(table.visuals))
+        _print_section_md("Visuals", visual_titles)
         _print_section_md("Pages", sorted(table.pages))
         _print_section_md("Related Tables", related_tables)
         print()
@@ -259,7 +262,7 @@ def _print_table_section(
         print()
         _print_section_text("Columns", sorted(table.columns), no_color)
         _print_section_text("Measures", sorted(table.measures), no_color)
-        _print_section_text("Visuals", sorted(table.visuals), no_color)
+        _print_section_text("Visuals", visual_titles, no_color)
         _print_section_text("Pages", sorted(table.pages), no_color)
         _print_section_text("Related Tables", related_tables, no_color)
         print(_color(border, "90", no_color))

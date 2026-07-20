@@ -338,8 +338,8 @@ class TestExcelWorkbookStructure:
         wb = load_workbook(io.BytesIO(raw_bytes))
         assert wb.sheetnames == ["Visual Inventory", "Impact Analysis", "Measure Lineage"]
 
-    def test_sheet1_has_dax_column(self):
-        """Sheet 1 must include Full DAX of Direct Measures."""
+    def test_sheet1_no_dax_column(self):
+        """Sheet 1 must NOT include Full DAX of Direct Measures."""
         from services.excel_export import write_excel_report
         from openpyxl import load_workbook
         import io
@@ -350,7 +350,33 @@ class TestExcelWorkbookStructure:
         wb = load_workbook(io.BytesIO(raw_bytes))
         ws = wb["Visual Inventory"]
         headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
-        assert "Full DAX of Direct Measures" in headers
+        assert "Full DAX of Direct Measures" not in headers
+
+    def test_sheet1_includes_empty_pages(self):
+        """Sheet 1 must include pages even if they have no visuals."""
+        from services.excel_export import write_excel_report
+        from openpyxl import load_workbook
+        import io
+
+        graph = _build_calc_column_chain_graph()
+        # Add a page with no visuals to the graph
+        from models.page import Page
+        graph.pages["EmptyPage"] = Page(name="EmptyPage")
+
+        raw_bytes = write_excel_report(graph, output_path=None, exclude_system=False)
+
+        wb = load_workbook(io.BytesIO(raw_bytes))
+        ws = wb["Visual Inventory"]
+        # Loop through rows to see if EmptyPage is listed
+        found_empty_page = False
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=1).value == "EmptyPage":
+                found_empty_page = True
+                # The other columns should be None/blank
+                assert ws.cell(row=row, column=2).value is None
+                assert ws.cell(row=row, column=3).value is None
+                break
+        assert found_empty_page, "EmptyPage was not listed in Visual Inventory"
 
     def test_sheet3_has_dax_column(self):
         """Sheet 3 must include Full DAX Expression."""
@@ -365,3 +391,122 @@ class TestExcelWorkbookStructure:
         ws = wb["Measure Lineage"]
         headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
         assert "Full DAX Expression" in headers
+
+
+class TestVisualParserTitleExtraction:
+    """Verify that parse_visual extracts visual titles from modern and legacy JSON shapes."""
+
+    def test_extract_title_from_modern_visual_container_objects(self):
+        from parser.visual_parser import parse_visual
+        visual_json = {
+            "visual": {
+                "visualType": "lineChart",
+                "visualContainerObjects": {
+                    "title": [
+                        {
+                            "properties": {
+                                "text": {
+                                    "expr": {
+                                        "Literal": {
+                                            "Value": "'Total Invoice by Month'"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        visual = parse_visual(visual_json, visual_id="v1")
+        assert visual.title == "Total Invoice by Month"
+        assert visual.type == "lineChart"
+
+    def test_extract_title_from_legacy_objects(self):
+        from parser.visual_parser import parse_visual
+        visual_json = {
+            "visual": {
+                "visualType": "columnChart",
+                "objects": {
+                    "title": [
+                        {
+                            "properties": {
+                                "text": {
+                                    "expr": {
+                                        "Literal": {
+                                            "Value": "'Custom Title'"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        visual = parse_visual(visual_json, visual_id="v2")
+        assert visual.title == "Custom Title"
+        assert visual.type == "columnChart"
+
+    def test_fallback_to_type_when_no_title(self):
+        from parser.visual_parser import parse_visual
+        visual_json = {
+            "visual": {
+                "visualType": "barChart"
+            }
+        }
+        visual = parse_visual(visual_json, visual_id="v3")
+        assert visual.title == "barChart"
+        assert visual.type == "barChart"
+
+
+class TestVisualIdentityCollisions:
+    """Verify that multiple visuals with identical titles on the same page
+    do not collide at the page, table, and measure visuals aggregations."""
+
+    def test_visual_title_collisions_on_same_page(self):
+        # 1. Build a model with duplicate visual titles on the same page
+        model = RawSemanticModel()
+        model.tables["Sales"] = RawTable(
+            name="Sales",
+            columns={"Amount": RawColumn(name="Amount")},
+            measures=[RawMeasure(name="Total Sales", table="Sales", dax="SUM(Sales[Amount])")]
+        )
+
+        report = RawReport()
+        # page1::v1 and page1::v2 have the exact same title ("Card")
+        report.visuals["page1::v1"] = RawVisual(
+            id="page1::v1", title="Card", type="card", raw_field_refs={("Sales", "Total Sales")}
+        )
+        report.visuals["page1::v2"] = RawVisual(
+            id="page1::v2", title="Card", type="card", raw_field_refs={("Sales", "Total Sales")}
+        )
+
+        report.pages.append(RawPage(name="Home", visual_ids=["page1::v1", "page1::v2"]))
+
+        graph = DependencyEngine(model, report).build()
+
+        # Both visuals must exist in the graph
+        assert len(graph.visuals) == 2
+        assert "page1::v1" in graph.visuals
+        assert "page1::v2" in graph.visuals
+
+        # Page visuals must contain both visual IDs (no deduplication by title)
+        page = graph.pages["Home"]
+        assert len(page.visuals) == 2
+        assert "page1::v1" in page.visuals
+        assert "page1::v2" in page.visuals
+
+        # Table visuals must contain both visual IDs
+        table = graph.tables["Sales"]
+        assert len(table.visuals) == 2
+        assert "page1::v1" in table.visuals
+        assert "page1::v2" in table.visuals
+
+        # Measure visuals must contain both visual IDs
+        measure = graph.measures["Total Sales"]
+        assert len(measure.visuals) == 2
+        assert "page1::v1" in measure.visuals
+        assert "page1::v2" in measure.visuals
+
+

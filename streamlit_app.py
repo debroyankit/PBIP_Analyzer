@@ -591,7 +591,8 @@ with tab_tables:
 
                 with c2:
                     st.markdown(_section_title("👁️", "Visuals"), unsafe_allow_html=True)
-                    st.markdown(_render_badge_list(sorted(table.visuals), "purple"), unsafe_allow_html=True)
+                    table_visual_titles = sorted(graph.visuals[vid].title for vid in table.visuals if vid in graph.visuals)
+                    st.markdown(_render_badge_list(table_visual_titles, "purple"), unsafe_allow_html=True)
 
                     st.markdown(_section_title("📄", "Pages"), unsafe_allow_html=True)
                     st.markdown(_render_badge_list(sorted(table.pages), "amber"), unsafe_allow_html=True)
@@ -644,7 +645,8 @@ with tab_measures:
 
                 with c2:
                     st.markdown(_section_title("👁️", "Used in Visuals"), unsafe_allow_html=True)
-                    st.markdown(_render_badge_list(sorted(measure.visuals), "purple"), unsafe_allow_html=True)
+                    measure_visual_titles = sorted(graph.visuals[vid].title for vid in measure.visuals if vid in graph.visuals)
+                    st.markdown(_render_badge_list(measure_visual_titles, "purple"), unsafe_allow_html=True)
 
                     st.markdown(_section_title("📄", "Used on Pages"), unsafe_allow_html=True)
                     st.markdown(_render_badge_list(sorted(measure.pages), "amber"), unsafe_allow_html=True)

@@ -77,33 +77,68 @@ def _extract_title(visual_json: dict[str, Any]) -> str | None:
     """Best-effort search for a user-set visual title.
 
     Power BI stores title text as a DAX-literal string buried inside
-    ``objects.title[*].properties.text.expr.Literal.Value`` (format varies
-    slightly by version). We search generically for any "Literal" -> "Value"
-    pair that sits underneath a "title" key, rather than hardcoding the full
-    path.
+    ``objects.title[*].properties.text.expr.Literal.Value`` or
+    ``visualContainerObjects.title[*].properties.text.expr.Literal.Value``
+    (format varies slightly by version). We search generically for any
+    "Literal" -> "Value" pair or direct string property that sits underneath
+    a "title" key in either container, rather than hardcoding the full path.
     """
-    objects = visual_json.get("visual", visual_json).get("objects", {})
-    title_objects = objects.get("title") if isinstance(objects, dict) else None
-    if not title_objects:
-        return None
+    containers = []
+    visual = visual_json.get("visual")
+    if isinstance(visual, dict):
+        containers.append(visual.get("objects"))
+        containers.append(visual.get("visualContainerObjects"))
+        containers.append(visual.get("vcObjects"))
+    containers.append(visual_json.get("objects"))
+    containers.append(visual_json.get("visualContainerObjects"))
+    containers.append(visual_json.get("vcObjects"))
 
-    literal_value = _find_first_literal_value(title_objects)
-    if literal_value is None:
-        return None
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        title_objects = container.get("title")
+        if not isinstance(title_objects, list):
+            continue
 
-    # Literal string values are stored quoted, e.g. "'My Title'".
-    return literal_value.strip("'\"")
+        for title_obj in title_objects:
+            if not isinstance(title_obj, dict):
+                continue
+            properties = title_obj.get("properties")
+            if not isinstance(properties, dict):
+                continue
+            text_node = properties.get("text")
+            if text_node is not None:
+                literal_value = _find_first_literal_value(text_node)
+                if literal_value is not None:
+                    # Literal string values are stored quoted, e.g. "'My Title'".
+                    return literal_value.strip("'\"")
+
+    return None
 
 
 def _find_first_literal_value(node: Any) -> str | None:
     if isinstance(node, dict):
+        # 1. Check for standard Literal Value structure
         literal = node.get("Literal")
         if isinstance(literal, dict) and isinstance(literal.get("Value"), str):
             return literal["Value"]
-        for value in node.values():
-            result = _find_first_literal_value(value)
-            if result is not None:
-                return result
+
+        # 2. Check for direct "text", "Value", "value", or "staticValue" strings
+        for key in ["text", "Value", "value", "staticValue"]:
+            val = node.get(key)
+            if isinstance(val, str):
+                return val
+            if isinstance(val, dict):
+                res = _find_first_literal_value(val)
+                if res is not None:
+                    return res
+
+        # 3. Recursively search other keys
+        for k, v in node.items():
+            if k not in ["text", "Value", "value", "staticValue"]:
+                res = _find_first_literal_value(v)
+                if res is not None:
+                    return res
     elif isinstance(node, list):
         for item in node:
             result = _find_first_literal_value(item)

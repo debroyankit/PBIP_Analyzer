@@ -15,7 +15,7 @@ class Table:
         measures: Names of measures that reference this table (either because
             it is their home table, or because their DAX expression touches
             this table).
-        visuals: Titles/ids of visuals that render data from this table
+        visuals: Unique visual IDs of visuals that render data from this table
             (directly, or transitively through a measure that references it).
         pages: Names of report pages that contain at least one visual using
             this table.

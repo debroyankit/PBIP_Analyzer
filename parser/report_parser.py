@@ -112,7 +112,7 @@ def _parse_pbir_report(pages_dir: Path) -> RawReport:
                     logger.warning("Skipping non-object visual.json at '%s'.", visual_json_path)
                     continue
 
-                raw_visual = parse_visual(visual_content, visual_id=visual_dir.name)
+                raw_visual = parse_visual(visual_content, visual_id=f"{page_dir.name}::{visual_dir.name}")
                 report.visuals[raw_visual.id] = raw_visual
                 raw_page.visual_ids.append(raw_visual.id)
 
