@@ -106,13 +106,13 @@ def analyze_pbip(
     if write_excel:
         write_excel_file(graph, resolved_output_dir, exclude_system=exclude_system)
 
-    print_console_report(
-        graph,
-        table_filter=table_filter,
-        exclude_system=exclude_system,
-        no_color=no_color,
-        output_format=output_format,
-    )
+    # print_console_report(
+    #     graph,
+    #     table_filter=table_filter,
+    #     exclude_system=exclude_system,
+    #     no_color=no_color,
+    #     output_format=output_format,
+    # )
 
     return graph
 
