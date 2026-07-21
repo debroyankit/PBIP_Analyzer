@@ -20,6 +20,9 @@ Supports both report formats Power BI Desktop can save:
 
     MyReport.Report/
         report.json      (contains "sections": [{"visualContainers": [...]}])
+
+In both formats, page-level and report-level filters are also parsed so
+that fields used *only* in filters are not falsely flagged as unused.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from parser.visual_parser import RawVisual, parse_visual
+from parser.visual_parser import RawVisual, parse_visual, _extract_field_refs
 from utils.exceptions import CorruptFileError, ReportNotFoundError
 from utils.file_utils import read_json_safe
 from utils.logging_config import get_logger
@@ -41,12 +44,14 @@ logger = get_logger("report_parser")
 class RawPage:
     name: str
     visual_ids: list[str] = field(default_factory=list)
+    filter_field_refs: set[tuple[str, str]] = field(default_factory=set)
 
 
 @dataclass
 class RawReport:
     pages: list[RawPage] = field(default_factory=list)
     visuals: dict[str, RawVisual] = field(default_factory=dict)  # keyed by visual id
+    report_filter_field_refs: set[tuple[str, str]] = field(default_factory=set)
 
 
 def parse_report(report_dir: Path) -> RawReport:
@@ -67,7 +72,7 @@ def parse_report(report_dir: Path) -> RawReport:
 
     if pages_dir.is_dir():
         logger.info("Detected PBIR (folder-based) report format.")
-        return _parse_pbir_report(pages_dir)
+        return _parse_pbir_report(pages_dir, report_dir)
 
     if legacy_report_json.is_file():
         logger.info("Detected legacy single-file report format.")
@@ -84,7 +89,7 @@ def parse_report(report_dir: Path) -> RawReport:
 # --------------------------------------------------------------------------
 
 
-def _parse_pbir_report(pages_dir: Path) -> RawReport:
+def _parse_pbir_report(pages_dir: Path, report_dir: Path) -> RawReport:
     report = RawReport()
 
     page_dirs = sorted(p for p in pages_dir.iterdir() if p.is_dir())
@@ -100,6 +105,12 @@ def _parse_pbir_report(pages_dir: Path) -> RawReport:
 
         page_name = page_content.get("displayName") or page_content.get("name") or page_dir.name
         raw_page = RawPage(name=page_name)
+
+        # --- Extract page-level filter references ---
+        page_filters = page_content.get("filters")
+        if not page_filters and isinstance(page_content.get("filterConfig"), dict):
+            page_filters = page_content["filterConfig"].get("filters")
+        raw_page.filter_field_refs = set(_extract_filter_refs(page_filters))
 
         visuals_dir = page_dir / "visuals"
         if visuals_dir.is_dir():
@@ -117,6 +128,21 @@ def _parse_pbir_report(pages_dir: Path) -> RawReport:
                 raw_page.visual_ids.append(raw_visual.id)
 
         report.pages.append(raw_page)
+
+    # --- Extract report-level filter references from definition/report.json ---
+    report_json_path = report_dir / "definition" / "report.json"
+    if report_json_path.is_file():
+        try:
+            report_content = read_json_safe(report_json_path)
+            if isinstance(report_content, dict):
+                report_filters = report_content.get("filters")
+                if not report_filters and isinstance(report_content.get("filterConfig"), dict):
+                    report_filters = report_content["filterConfig"].get("filters")
+                report.report_filter_field_refs = set(
+                    _extract_filter_refs(report_filters)
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not parse report-level filters from '%s'.", report_json_path)
 
     return report
 
@@ -137,6 +163,12 @@ def _parse_legacy_report(report_json_path: Path) -> RawReport:
     for section_index, section in enumerate(sections):
         page_name = section.get("displayName") or section.get("name") or f"Page {section_index + 1}"
         raw_page = RawPage(name=page_name)
+
+        # --- Extract page-level filter references ---
+        section_filters = section.get("filters")
+        if not section_filters and isinstance(section.get("filterConfig"), dict):
+            section_filters = section["filterConfig"].get("filters")
+        raw_page.filter_field_refs = set(_extract_filter_refs(section_filters))
 
         for vc_index, visual_container in enumerate(section.get("visualContainers", [])):
             visual_id = f"{page_name}::visual{vc_index}"
@@ -162,4 +194,43 @@ def _parse_legacy_report(report_json_path: Path) -> RawReport:
 
         report.pages.append(raw_page)
 
+    # --- Extract report-level filter references ---
+    report_filters = content.get("filters")
+    if not report_filters and isinstance(content.get("filterConfig"), dict):
+        report_filters = content["filterConfig"].get("filters")
+    report.report_filter_field_refs = set(_extract_filter_refs(report_filters))
+
     return report
+
+
+# --------------------------------------------------------------------------
+# Filter reference extraction
+# --------------------------------------------------------------------------
+
+
+def _extract_filter_refs(filters_raw: Any) -> list[tuple[str, str]]:
+    """Extract (table, field) references from a filters array.
+
+    Handles both shapes:
+      - A JSON-encoded string (legacy format stores filters as a string).
+      - A list of filter objects (PBIR / some legacy variants).
+
+    Internally delegates to ``_extract_field_refs`` from the visual parser,
+    which walks the JSON tree generically for ``Expression``/``Property``
+    pairs — the same pattern Power BI uses inside filter definitions.
+    """
+    if filters_raw is None:
+        return []
+
+    # Legacy format may store the filters array as a JSON string.
+    if isinstance(filters_raw, str):
+        try:
+            filters_raw = json.loads(filters_raw)
+        except json.JSONDecodeError:
+            logger.warning("Could not parse filters JSON string.")
+            return []
+
+    if not isinstance(filters_raw, (list, dict)):
+        return []
+
+    return _extract_field_refs(filters_raw)

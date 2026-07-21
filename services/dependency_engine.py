@@ -276,7 +276,61 @@ class DependencyEngine:
                 graph.visuals[visual.id] = visual
                 page.visuals.add(visual.id)
 
+            # --- Synthetic visual for page-level filter references ---
+            if raw_page.filter_field_refs:
+                self._add_filter_visual(
+                    graph, page, raw_page.filter_field_refs,
+                    visual_id=f"__page_filter__{raw_page.name}",
+                    title=f"(Page Filter) {raw_page.name}",
+                    measure_names=measure_names,
+                    table_measure_names=table_measure_names,
+                )
+
             graph.pages[page.name] = page
+
+        # --- Synthetic visual for report-level filter references ---
+        if self._report.report_filter_field_refs:
+            report_filter_page_name = "(Report-Level Filters)"
+            page = Page(name=report_filter_page_name)
+            self._add_filter_visual(
+                graph, page, self._report.report_filter_field_refs,
+                visual_id="__report_filter__",
+                title="(Report Filter)",
+                measure_names=measure_names,
+                table_measure_names=table_measure_names,
+            )
+            graph.pages[report_filter_page_name] = page
+
+    def _add_filter_visual(
+        self,
+        graph: DependencyGraph,
+        page: Page,
+        field_refs: set[tuple[str, str]],
+        visual_id: str,
+        title: str,
+        measure_names: set[str],
+        table_measure_names: dict[str, set[str]],
+    ) -> None:
+        """Create a synthetic 'filter' visual and register it on the page."""
+        visual = Visual(
+            id=visual_id,
+            title=title,
+            type="filter",
+            page=page.name,
+            raw_field_refs=set(field_refs),
+        )
+        for table_name, field_name in field_refs:
+            visual.tables.add(table_name)
+            is_measure = field_name in measure_names and field_name in table_measure_names.get(
+                table_name, set()
+            )
+            if is_measure or field_name in measure_names:
+                visual.measures.add(field_name)
+            else:
+                visual.columns.add(f"{table_name}[{field_name}]")
+
+        graph.visuals[visual.id] = visual
+        page.visuals.add(visual.id)
 
     # ------------------------------------------------------------------
     # Step 6: cross-linking

@@ -146,3 +146,112 @@ def test_transitive_unused_entities_and_system_filtering():
     # "Amount" column on Sales is referenced in "Total Sales" measure, which is in visual "v1".
     # So "Amount" should not be marked as unused.
     assert "Amount" not in unused["unused_columns"].get("Sales", [])
+
+
+# --------------------------------------------------------------------------
+# Filter-level reference tests
+# --------------------------------------------------------------------------
+
+
+def _build_model_with_filter_only_column() -> RawSemanticModel:
+    """A model with Sales (Amount, Region, Status) and a measure on Amount."""
+    model = RawSemanticModel()
+    model.tables["Sales"] = RawTable(
+        name="Sales",
+        columns={
+            "Amount": RawColumn(name="Amount"),
+            "Region": RawColumn(name="Region"),
+            "Status": RawColumn(name="Status"),
+        },
+        measures=[
+            RawMeasure(name="Total Sales", table="Sales", dax="SUM(Sales[Amount])"),
+        ],
+    )
+    return model
+
+
+def _build_report_with_page_filter() -> RawReport:
+    """Report where 'Status' column appears only in a page-level filter."""
+    report = RawReport()
+    visual = RawVisual(
+        id="v1",
+        title="Sales Card",
+        type="card",
+        raw_field_refs={("Sales", "Total Sales")},
+    )
+    report.visuals["v1"] = visual
+    page = RawPage(
+        name="Home",
+        visual_ids=["v1"],
+        filter_field_refs={("Sales", "Status")},
+    )
+    report.pages.append(page)
+    return report
+
+
+def _build_report_with_report_filter() -> RawReport:
+    """Report where 'Region' column appears only in a report-level filter."""
+    report = RawReport()
+    visual = RawVisual(
+        id="v1",
+        title="Sales Card",
+        type="card",
+        raw_field_refs={("Sales", "Total Sales")},
+    )
+    report.visuals["v1"] = visual
+    page = RawPage(name="Home", visual_ids=["v1"])
+    report.pages.append(page)
+    report.report_filter_field_refs = {("Sales", "Region")}
+    return report
+
+
+def test_page_filter_column_not_marked_unused():
+    """A column used only in a page-level filter must NOT be flagged unused."""
+    model = _build_model_with_filter_only_column()
+    report = _build_report_with_page_filter()
+    graph = DependencyEngine(model, report).build()
+    unused = find_unused_entities(graph)
+
+    # "Status" is only in a page filter — should NOT be unused.
+    assert "Status" not in unused["unused_columns"].get("Sales", [])
+
+
+def test_report_filter_column_not_marked_unused():
+    """A column used only in a report-level filter must NOT be flagged unused."""
+    model = _build_model_with_filter_only_column()
+    report = _build_report_with_report_filter()
+    graph = DependencyEngine(model, report).build()
+    unused = find_unused_entities(graph)
+
+    # "Region" is only in a report filter — should NOT be unused.
+    assert "Region" not in unused["unused_columns"].get("Sales", [])
+
+
+def test_synthetic_filter_visual_properties():
+    """Synthetic filter visuals have the correct type and field refs."""
+    model = _build_model_with_filter_only_column()
+    report = _build_report_with_page_filter()
+    graph = DependencyEngine(model, report).build()
+
+    # A synthetic page-filter visual should exist
+    filter_visual = graph.visuals.get("__page_filter__Home")
+    assert filter_visual is not None
+    assert filter_visual.type == "filter"
+    assert "Sales[Status]" in filter_visual.columns
+    assert filter_visual.page == "Home"
+
+
+def test_report_filter_creates_synthetic_page():
+    """Report-level filters create a synthetic page and visual."""
+    model = _build_model_with_filter_only_column()
+    report = _build_report_with_report_filter()
+    graph = DependencyEngine(model, report).build()
+
+    # Synthetic report-filter page and visual should exist
+    assert "(Report-Level Filters)" in graph.pages
+    filter_visual = graph.visuals.get("__report_filter__")
+    assert filter_visual is not None
+    assert filter_visual.type == "filter"
+    assert "Sales[Region]" in filter_visual.columns
+    assert filter_visual.page == "(Report-Level Filters)"
+
