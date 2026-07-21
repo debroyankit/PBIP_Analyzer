@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from parser.tmdl_parser import _parse_tmdl_tables, _parse_tmdl_relationships
+from parser.tmdl_parser import _parse_tmdl_tables, _parse_tmdl_relationships, _parse_tmdl_roles, _parse_bim
 
 
 SAMPLE_TABLE_TMDL = """
@@ -90,3 +90,55 @@ def test_parses_relationships():
     assert rels[0].from_column == "Vendor"
     assert rels[0].to_table == "Customers"
     assert rels[0].to_column == "Vendor"
+
+
+# --------------------------------------------------------------------------
+# Role Tests
+# --------------------------------------------------------------------------
+
+SAMPLE_ROLE_TMDL = """
+role 'Sales Manager'
+\tmodelPermission: read
+
+\ttablePermission 'Sales' = 'Sales'[Region] == "North"
+
+\ttablePermission 'Target' = 
+\t\t'Target'[Manager] == USERPRINCIPALNAME()
+"""
+
+def test_parses_tmdl_roles():
+    roles = _parse_tmdl_roles(SAMPLE_ROLE_TMDL)
+    assert len(roles) == 1
+    role = roles[0]
+    assert role.name == "Sales Manager"
+    assert len(role.table_permissions) == 2
+    assert role.table_permissions["Sales"] == '\'Sales\'[Region] == "North"'
+    assert role.table_permissions["Target"] == "'Target'[Manager] == USERPRINCIPALNAME()"
+
+def test_parses_bim_roles(tmp_path):
+    bim_content = {
+        "model": {
+            "tables": [],
+            "roles": [
+                {
+                    "name": "Admin",
+                    "tablePermissions": [
+                        {
+                            "name": "Employees",
+                            "filterExpression": "Employees[Department] = \"IT\""
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    import json
+    bim_file = tmp_path / "model.bim"
+    with open(bim_file, "w") as f:
+        json.dump(bim_content, f)
+
+    model = _parse_bim(bim_file)
+    assert "Admin" in model.roles
+    role = model.roles["Admin"]
+    assert role.name == "Admin"
+    assert role.table_permissions["Employees"] == 'Employees[Department] = "IT"'

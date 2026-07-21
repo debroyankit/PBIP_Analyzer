@@ -34,7 +34,7 @@ from utils.logging_config import get_logger
 
 logger = get_logger("tmdl_parser")
 
-_TMDL_TOP_LEVEL_KEYWORDS = {"column", "measure", "partition", "hierarchy", "table"}
+_TMDL_TOP_LEVEL_KEYWORDS = {"column", "measure", "partition", "hierarchy", "table", "role", "modelPermission", "tablePermission"}
 
 # Known TMDL measure/column property keys. These always terminate a DAX
 # continuation, regardless of indentation, because in TMDL a measure's or
@@ -103,9 +103,17 @@ class RawRelationship:
 
 
 @dataclass
+class RawRole:
+    name: str
+    table_permissions: dict[str, str] = field(default_factory=dict)
+
+
+
+@dataclass
 class RawSemanticModel:
     tables: dict[str, RawTable] = field(default_factory=dict)
     relationships: list[RawRelationship] = field(default_factory=list)
+    roles: dict[str, RawRole] = field(default_factory=dict)
 
 
 def parse_semantic_model(semantic_model_dir: Path) -> RawSemanticModel:
@@ -169,6 +177,19 @@ def _parse_tmdl(definition_dir: Path) -> RawSemanticModel:
         model_tmdl = definition_dir / "model.tmdl"
         if model_tmdl.is_file():
             model.relationships = _parse_tmdl_relationships(read_text_safe(model_tmdl))
+
+    # Parse roles from roles/ directory or inline
+    roles_dir = definition_dir / "roles"
+    role_files = list_files(roles_dir, "*.tmdl")
+    if not role_files:
+        role_files = [
+            p for p in list_files(definition_dir, "*.tmdl")
+            if p.name not in ("relationships.tmdl", "database.tmdl")
+        ]
+    for role_file in role_files:
+        text = read_text_safe(role_file)
+        for role in _parse_tmdl_roles(text):
+            model.roles[role.name] = role
 
     return model
 
@@ -327,6 +348,39 @@ def _parse_tmdl_relationships(text: str) -> list[RawRelationship]:
     return relationships
 
 
+def _parse_tmdl_roles(text: str) -> list[RawRole]:
+    """Parse ``role`` blocks and their ``tablePermission`` rules."""
+    roles: list[RawRole] = []
+    lines = text.splitlines()
+    current_role: RawRole | None = None
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if stripped.startswith("role ") and _indent_of(line) == 0:
+            name = _unquote(stripped[len("role ") :])
+            current_role = RawRole(name=name)
+            roles.append(current_role)
+            i += 1
+            continue
+
+        if current_role is not None and stripped.startswith("tablePermission "):
+            # We can use the existing multi-line parsing function to capture
+            # the DAX rule, because tablePermission has identical continuation
+            # semantics (e.g. `tablePermission 'Table' = \n\tDAX`).
+            table_name, dax, next_i = _parse_dax_named_block(lines, i, "tablePermission ")
+            current_role.table_permissions[table_name] = dax
+            i = next_i
+            continue
+
+        i += 1
+
+    return roles
+
+
+
 # --------------------------------------------------------------------------
 # Legacy TMSL/JSON (.bim) parsing
 # --------------------------------------------------------------------------
@@ -375,5 +429,20 @@ def _parse_bim(bim_path: Path) -> RawSemanticModel:
                 to_column=rel.get("toColumn", ""),
             )
         )
+
+    for role_json in model_section.get("roles", []):
+        role_name = role_json.get("name", "")
+        if not role_name:
+            continue
+        raw_role = RawRole(name=role_name)
+
+        for tp in role_json.get("tablePermissions", []):
+            table_name = tp.get("name", "")
+            dax = tp.get("filterExpression", "")
+            if isinstance(dax, list):
+                dax = "\n".join(dax)
+            if table_name and dax:
+                raw_role.table_permissions[table_name] = dax
+        model.roles[role_name] = raw_role
 
     return model

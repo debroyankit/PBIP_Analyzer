@@ -63,6 +63,17 @@ class CalculatedColumn:
 
 
 @dataclass
+class Role:
+    """An RLS role and the tables/columns/measures it references."""
+    name: str
+    referenced_tables: set[str] = field(default_factory=set)
+    referenced_columns: set[str] = field(default_factory=set)
+    referenced_measures: set[str] = field(default_factory=set)
+
+
+
+
+@dataclass
 class DependencyGraph:
     """Fully linked output: one repository per entity type, keyed by name/id."""
 
@@ -72,6 +83,7 @@ class DependencyGraph:
     pages: dict[str, Page] = field(default_factory=dict)
     relationships: list[Relationship] = field(default_factory=list)
     calculated_columns: dict[str, CalculatedColumn] = field(default_factory=dict)  # key: "Table[Column]"
+    roles: dict[str, Role] = field(default_factory=dict)
 
 
 class DependencyEngine:
@@ -100,6 +112,7 @@ class DependencyEngine:
         self._build_measures(graph)
         self._build_calculated_columns(graph)
         self._build_relationships(graph)
+        self._build_roles(graph)
         self._build_pages_and_visuals(graph)
         self._link_measures_to_tables(graph)
         self._link_visuals_to_tables_and_measures(graph)
@@ -235,6 +248,25 @@ class DependencyEngine:
                 from_table.related_tables.add(raw_rel.to_table)
             if to_table is not None and raw_rel.from_table:
                 to_table.related_tables.add(raw_rel.from_table)
+
+    # ------------------------------------------------------------------
+    # Step 4.5: roles
+    # ------------------------------------------------------------------
+
+    def _build_roles(self, graph: DependencyGraph) -> None:
+        """Extract dependencies from RLS role filter expressions."""
+        all_measure_names = set(graph.measures.keys())
+        for raw_role in self._semantic_model.roles.values():
+            role = Role(name=raw_role.name)
+            for table_name, dax_filter in raw_role.table_permissions.items():
+                dax_refs = extract_references(dax_filter)
+                role.referenced_tables |= set(dax_refs.tables)
+                role.referenced_columns |= set(dax_refs.qualified_columns)
+                role.referenced_measures |= {m for m in dax_refs.bare_names if m in all_measure_names}
+                # RLS implicitly references the table it is filtering
+                role.referenced_tables.add(table_name)
+            graph.roles[role.name] = role
+
 
     # ------------------------------------------------------------------
     # Step 5: pages + visuals
@@ -414,7 +446,18 @@ def find_unused_entities(graph: DependencyGraph) -> dict[str, object]:
                 used_columns.add(col)
                 queue.append(("column", col))
 
-    # 3. Unified BFS
+    # 3. Seed queue with RLS role dependencies
+    for role in graph.roles.values():
+        for m in role.referenced_measures:
+            if m in graph.measures and m not in used_measures:
+                used_measures.add(m)
+                queue.append(("measure", m))
+        for col in role.referenced_columns:
+            if col not in used_columns:
+                used_columns.add(col)
+                queue.append(("column", col))
+
+    # 4. Unified BFS
     while queue:
         node_type, name = queue.pop(0)
 

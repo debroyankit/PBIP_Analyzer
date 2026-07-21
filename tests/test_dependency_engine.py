@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from parser.report_parser import RawPage, RawReport
-from parser.tmdl_parser import RawColumn, RawMeasure, RawRelationship, RawSemanticModel, RawTable
+from parser.tmdl_parser import RawColumn, RawMeasure, RawRelationship, RawSemanticModel, RawTable, RawRole
 from parser.visual_parser import RawVisual
 from services.dependency_engine import DependencyEngine, find_unused_entities
 
@@ -254,4 +254,34 @@ def test_report_filter_creates_synthetic_page():
     assert filter_visual.type == "filter"
     assert "Sales[Region]" in filter_visual.columns
     assert filter_visual.page == "(Report-Level Filters)"
+
+
+# --------------------------------------------------------------------------
+# RLS Role Tests
+# --------------------------------------------------------------------------
+
+def test_rls_role_column_not_marked_unused():
+    """A column used only in an RLS role's tablePermission must NOT be flagged unused."""
+    model = _build_model_with_filter_only_column()
+    
+    # Add a role that uses the "Region" column
+    role = RawRole(name="NorthManager")
+    role.table_permissions["Sales"] = "'Sales'[Region] == \"North\""
+    model.roles["NorthManager"] = role
+
+    # Use a report with NO visuals and NO filters.
+    report = RawReport()
+    graph = DependencyEngine(model, report).build()
+    
+    # Verify the role was parsed into the graph
+    assert "NorthManager" in graph.roles
+    assert "Sales[Region]" in graph.roles["NorthManager"].referenced_columns
+    
+    unused = find_unused_entities(graph)
+
+    # "Region" is used in an RLS filter — should NOT be unused.
+    assert "Region" not in unused["unused_columns"].get("Sales", [])
+    # "Amount" and "Status" are genuinely unused in this empty report
+    assert "Amount" in unused["unused_columns"].get("Sales", [])
+    assert "Status" in unused["unused_columns"].get("Sales", [])
 
