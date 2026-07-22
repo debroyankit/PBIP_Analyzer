@@ -23,12 +23,11 @@ This will:
 
 1. Locate the project's Report and Semantic Model folders automatically (accepts either a direct path to a `.pbip` file, or the parent folder containing one).
 2. Parse the semantic model (tables, columns, calculated columns, measures,
-   relationships).
-3. Parse the report (pages, visuals, fields/measures used).
-4. Build the full dependency graph, including relationship- and
+   relationships, and Row-Level Security RLS roles).
+3. Parse the report (pages, visuals, fields/measures used, and Page/Report-level filters).
+4. Build the full dependency graph, including RLS dependencies, relationship- and
    calculated-column-derived table links, and measure-to-measure lineage.
-5. Print a per-table report to the console, plus an unused-entities summary.
-6. Automatically save a formatted Excel workbook with a unique timestamp (e.g. `dependency_report_20260719_164728.xlsx`) to your `Downloads` folder. (It also writes a copy to `./output/dependency_report.xlsx`).
+5. Automatically save a formatted Excel workbook with a unique timestamp (e.g. `dependency_report_20260719_164728.xlsx`) to your `Downloads` folder. (It also writes a copy to `./output/dependency_report.xlsx`).
 
 Useful flags:
 
@@ -94,12 +93,12 @@ pbip_analyzer/
 ├── main.py                     # CLI entry point + analyze_pbip() public API
 ├── parser/
 │   ├── pbip_loader.py          # Finds the .Report / .SemanticModel folders
-│   ├── tmdl_parser.py          # Parses TMDL (+ legacy .bim) -> tables/measures/relationships
-│   ├── report_parser.py        # Parses PBIR (+ legacy report.json) -> pages/visuals
+│   ├── tmdl_parser.py          # Parses TMDL (+ legacy .bim) -> tables/measures/relationships/roles
+│   ├── report_parser.py        # Parses PBIR (+ legacy report.json) -> pages/visuals/filters
 │   ├── visual_parser.py        # Parses one visual.json -> type/title/field refs
 │   └── dax_parser.py           # Regex-based DAX reference extractor
 ├── services/
-│   ├── dependency_engine.py    # Cross-links tables/measures/visuals/pages
+│   ├── dependency_engine.py    # Cross-links tables/measures/visuals/pages/roles
 │   └── graph_export.py         # Optional Graphviz DOT export
 ├── models/
 │   ├── table.py                # Table dataclass
@@ -128,14 +127,14 @@ FastAPI endpoint without touching parsing logic.
    resolves the sibling Report/SemanticModel folders (via the pointer files
    Power BI writes, with a suffix-scan fallback).
 2. **`tmdl_parser.parse_semantic_model`** — returns a `RawSemanticModel`
-   (tables → columns/measures, plus relationships).
+   (tables → columns/measures, relationships, and `roles` for RLS security filters).
 3. **`report_parser.parse_report`** — returns a `RawReport` (pages →
-   visuals), delegating each visual to **`visual_parser.parse_visual`**.
+   visuals and page/report filters), delegating each visual to **`visual_parser.parse_visual`**.
 4. **`dax_parser.extract_references`** — used by the engine to figure out
-   which tables/columns each measure's DAX expression touches.
+   which tables/columns each measure and RLS role filter DAX expression touches.
 5. **`services.dependency_engine.DependencyEngine.build()`** — combines all
    of the above into a fully cross-linked `DependencyGraph`
-   (`tables`, `measures`, `visuals`, `pages` dictionaries).
+   (`tables`, `measures`, `visuals`, `pages`, `roles` dictionaries).
 
 ### How "where is a table used" is computed
 
@@ -163,14 +162,19 @@ FastAPI endpoint without touching parsing logic.
   the lineage chain created when one measure references another via a bare
   `[Measure Name]` expression.
 
-### Unused-entity detection
+### Unused-entity detection & Safety Checks
 
 Since the graph already knows every table/measure/column's full usage, the
-engine also flags anything **never referenced by a visual** -- a quick
+engine flags anything **never referenced by a visual, filter, or RLS role** -- a quick
 model-hygiene signal for identifying imported-but-unused tables, abandoned
-measures, or columns nobody ever put on a report. This is included in the
-console report (final section) and in `dependency_report_full.json` under
-`"unused_entities"`.
+measures, or columns nobody ever put on a report.
+
+Columns and measures are safely protected from being marked as "unused" if they are:
+- Used on any visual canvas (axes, legends, tooltips, values).
+- Used in **Page-Level** or **Report-Level** filters (`filterConfig.filters`).
+- Used in **Row-Level Security (RLS)** table permission DAX expressions (`tablePermission`).
+- Used inside calculated column DAX expressions or measure-to-measure dependency chains.
+- Used as relationship join keys between tables.
 
 ### Dependency graph diagram (optional)
 
@@ -267,11 +271,11 @@ Columns:
 
 ### Excel workbook (`dependency_report_[timestamp].xlsx`)
 
-The workbook is styled in deep navy and contains exactly three sheets:
+The workbook is formatted with clear headers and contains three sheets:
 
-1. **Table Dependency Summary**: One row per table showing aggregated columns, measures, visuals, report pages, and the total counts for measures and visuals.
-2. **Detailed Dependency Mapping**: One row per unique (Table, Column, Measure, Visual, Type, Page) relationship. This sheet is filterable and allows fast searching.
-3. **DAX Dependency Lineage**: Displays measure dependencies including direct tables, direct measures referenced, and final transitively dependent tables.
+1. **Visual Inventory**: One row per visual showing Page Name, Visual Name, Visual Type, Direct Measures used, Dependency Tables, and Dependency Columns (including transitive lineage through measures and calculated columns).
+2. **Impact Analysis**: One row per Table, Measure, Calculated Column, and Column in the model. Displays usage counts (# Visuals, # Measures, # Calc Columns), relationship flags, and an actionable classification Status (*Active Table/Measure/Column*, *No References Found*, *Bridge Table*, *Used via Relationship Only*, *System Table*).
+3. **Measure Lineage**: One row per measure showing direct measure dependencies, base columns used, dependency tables, visuals utilizing the measure, other measures depending on it, and the full DAX expression.
 
 Every run automatically downloads a new copy of the Excel workbook with a unique timestamp in the filename directly to your user `Downloads` folder, avoiding locking issues if you have a report open in Excel.
 
@@ -326,7 +330,5 @@ The architecture is intentionally split so each extension point is isolated:
   a plain column reference (both simply register as "this entity touches
   that table").
 - Calculation groups and hierarchies are not yet modeled as their own
-  entities (only tables, columns, calculated columns, and measures are).
-- Visual **and filter** field references are both captured, since the field
-  walker scans the entire `visual.json` (query state *and* `filterConfig`)
-  generically -- verified against real-world PBIR exports.
+  entities (only tables, columns, calculated columns, measures, and RLS roles are).
+- Visuals, Page-Level filters, Report-Level filters (`filterConfig`), and Row-Level Security (RLS) filters are all fully parsed and incorporated into dependency resolution.
